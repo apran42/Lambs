@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+.venv/
+.env
+*.py[cod]
+
+*.pt
+*.engine
+backend/data/*.mp4
+
+# Node.js
+frontend/node_modules/
+frontend/build/
+frontend/.pnpm-debug.log
+
+# OS
+.DS_Store

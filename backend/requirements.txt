@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+ultralytics
+opencv-python
+influxdb-client
+python-multipart
