@@ -3,4 +3,5 @@ uvicorn[standard]
 ultralytics
 opencv-python
 influxdb-client
+python-dotenv
 python-multipart
