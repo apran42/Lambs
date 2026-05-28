@@ -12,9 +12,16 @@ class InfluxDBManager:
         # 데이터를 빠르게 밀어 넣기 위한 Write API (동기 방식)
         self.write_api = self.client.write_api()
 
-    def save_crowd_stats(self, camera_id: str, location: str, count: int):
+    def save_crowd_stats(
+            self,
+            facility_name: str,
+            location: str,
+            camera_id: str,
+            count: int
+        ):
         try:
             point = Point("crowd_stats") \
+                .tag("facility", facility_name)    \
                 .tag("device_id", camera_id) \
                 .tag("location", location) \
                 .field("people_count", count) \
