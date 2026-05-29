@@ -1,70 +1,130 @@
 import asyncio
-import base64
+import json
+import struct
 import cv2
-from fastapi import FastAPI, WebSocket
+from concurrent.futures import ThreadPoolExecutor
+from fastapi import FastAPI, WebSocket, Query
+from fastapi.middleware.cors import CORSMiddleware
+
 from database.influx_client import db_manager
 from ai.camera import VideoStream
 from ai.detector import PersonDetector
 from utils.geometry import calculate_positions
 
-app = FastAPI()
+app = FastAPI(title="Shepherd-AI 관제 서버", version="1.0.0")
 
-# 객체 생성 및 컴포넌트 초기화
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 video_stream = VideoStream()
 detector = PersonDetector()
+
+# 💡 [핵심 1] 무거운 AI 연산을 메인 스레드 방해 없이 처리할 독립 스레드 풀 생성
+executor = ThreadPoolExecutor(max_workers=1)
+
+# 실시간 AI 스냅샷 공유 변수
+shared_ai_data = {
+    "count": 0,
+    "boxes": [],
+    "status": "Normal"
+}
+
+# 💡 [핵심 2] CPU/GPU를 많이 쓰는 AI 추론은 일반 동기식(def) 함수로 작성합니다.
+def heavy_ai_inference(frame):
+    if frame is None:
+        return None
+    results = detector.track_objects(frame)
+    processed_boxes = calculate_positions(results)
+    return {
+        "count": len(processed_boxes),
+        "boxes": processed_boxes,
+        "status": "Crowded" if len(processed_boxes) > 10 else "Normal"
+    }
+
+# 백그라운드에서 주기적으로 AI를 돌려주는 태스크
+async def background_ai_worker():
+    global shared_ai_data
+    loop = asyncio.get_running_loop()
+    frame_count = 0
+    
+    print("🚀 스레드 풀 격리형 AI 워커 가동")
+    while True:
+        try:
+            frame = video_stream.get_frame()
+            if frame is None:
+                await asyncio.sleep(0.01)
+                continue
+            
+            # 🔥 무거운 AI 함수를 별도의 스레드 풀(Executor)로 보내어 메인 루프 결손 방지
+            ai_result = await loop.run_in_executor(executor, heavy_ai_inference, frame)
+            
+            if ai_result:
+                shared_ai_data = ai_result
+                
+                # 💡 [본인 파트] 시계열 데이터 가치 보존: InfluxDB 적재 처리 가동
+                frame_count += 1
+                if frame_count % 15 == 0:
+                    # 🛠️ [버그 수정] 변수 count를 ai_result["count"]로 올바르게 수정 및 주석 해제
+                    db_manager.save_crowd_stats(
+                        facility_name="Test_Campus", 
+                        location="Main_Entrance", 
+                        camera_id="CAM_01", 
+                        count=ai_result["count"] 
+                    )
+                    frame_count = 0
+            
+            await asyncio.sleep(0.01)
+        except Exception as e:
+            print(f"⚠️ AI 워커 에러: {e}")
+            await asyncio.sleep(1)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(background_ai_worker())
 
 @app.get("/")
 async def root():
     return {"message": "Shepherd-AI 관제 서버가 정상 구동 중입니다."}
 
+# ==========================================
+# 💡 메인 루프: AI 연산에 절대 간섭받지 않는 초고속 송출 채널
+# ==========================================
 @app.websocket("/ws/stream")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    frame_count = 0
+    global shared_ai_data
 
     try:
         while True:
-            # 1. [팀원 1 파트] 영상 프레임 캡처
             frame = video_stream.get_frame()
             if frame is None:
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.01)
                 continue
 
-            # 2. [팀원 1 파트] AI 객체 인식 및 트래킹 호출
-            results = detector.track_objects(frame)
-            
-            # 3. [팀원 2 파트] 바운딩 박스 좌표 추출 및 위치 계산 연산 호출
-            processed_boxes = calculate_positions(results)
-            count = len(processed_boxes)
+            # 전처리 및 압축 (이 연산은 매우 가벼움)
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+            _, buffer = cv2.imencode('.jpg', frame, encode_param)
+            image_bytes = buffer.tobytes()
 
-            # 4. [본인 파트] 시계열 데이터 가치 보존: 20프레임(약 1초)에 1번씩만 DB 적재
-            frame_count += 1
-            if frame_count % 20 == 0:
-                db_manager.save_crowd_stats(
-                    camera_id="CAM_01", 
-                    location="Main_Entrance", 
-                    count=count
-                )
-                frame_count = 0
-
-            # 5. 프론트엔드 실시간 전송용 경량화 전처리 (Jetson Nano 최적화)
-            frame_resized = cv2.resize(frame, (640, 480))
-            _, buffer = cv2.imencode('.jpg', frame_resized)
-            img_base64 = base64.b64encode(buffer).decode('utf-8')
-
-            # 웹소켓 JSON 전송 데이터 패키징
-            payload = {
-                "image": img_base64,
-                "count": count,
-                "boxes": processed_boxes,
-                "status": "Crowded" if count > 10 else "Normal"
+            # 별도 스레드에서 실시간 업데이트 중인 최신 AI 스냅샷을 얹어서 전송
+            meta_payload = {
+                "count": shared_ai_data["count"],
+                "boxes": shared_ai_data["boxes"],
+                "status": shared_ai_data["status"]
             }
+            json_bytes = json.dumps(meta_payload).encode('utf-8')
+            json_length = len(json_bytes)
+
+            packet = struct.pack(f"!I", json_length) + json_bytes + image_bytes
+            await websocket.send_bytes(packet)
             
-            await websocket.send_json(payload)
-            await asyncio.sleep(0.05) # 약 20fps 주기 싱크 조정
+            # 카메라 원본 규격에 맞게 30fps(0.033초) 속도로 칼같이 밀어줌
+            await asyncio.sleep(0.033)
             
     except Exception as e:
-        print(f"⚠️ Websocket 연결 종료 또는 에러 발생: {e}")
-    finally:
-        # 클라이언트가 이탈하거나 에러가 나더라도 스트림이 깨지지 않게 안전 유지
-        pass
+        print(f"⚠️ 스트리밍 Websocket 종료: {e}")
