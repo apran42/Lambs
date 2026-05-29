@@ -17,3 +17,6 @@ frontend/.pnpm-debug.log
 
 # SampleData
 /data/*.mp4
+
+# batch 파일
+*.bat
