@@ -10,6 +10,7 @@ from database.influx_client import db_manager
 from ai.camera import VideoStream
 from ai.detector import PersonDetector
 from utils.geometry import calculate_positions
+from routers.stats import router as stats_router
 
 app = FastAPI(title="Shepherd-AI 관제 서버", version="1.0.0")
 
@@ -20,6 +21,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(stats_router)
 
 video_stream = VideoStream()
 detector = PersonDetector()
