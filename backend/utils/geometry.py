@@ -10,15 +10,16 @@ def calculate_positions(results):
     if results and results[0].boxes:
         boxes = results[0].boxes.xyxy.tolist()
         cls_list = results[0].boxes.cls.tolist()  # ← 클래스 ID 추가 추출
+        orig_h, orig_w = results[0].orig_shape
     else:
-        boxes = []
-        cls_list = []
+        return []
         
     # 💡 [팀원 2의 알고리즘 작성 공간]
     # 캔버스 고정 해상도
-    FRAME_W, FRAME_H = 640, 480
-    MIN_BOX_W, MIN_BOX_H = 15, 30
-    MAX_BOX_W, MAX_BOX_H = FRAME_W * 0.8, FRAME_H * 0.8
+    FRAME_W, FRAME_H = orig_w, orig_h
+
+    MIN_BOX_W, MIN_BOX_H = FRAME_W * 0.01, FRAME_H * 0.01
+    MAX_BOX_W, MAX_BOX_H = FRAME_W * 0.95, FRAME_H * 0.95
 
     processed_boxes = []
     for box, cls_id in zip(boxes, cls_list):
