@@ -8,6 +8,7 @@ calib_images/ 폴더에 체스보드 사진(jpg/png)을 넣고 실행하면
 camera_matrix, dist_coeffs, 버전 정보가 JSON으로 저장됩니다.
 """
 
+
 import cv2
 import json
 import argparse
