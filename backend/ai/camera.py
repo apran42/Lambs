@@ -4,7 +4,6 @@ import numpy as np
 from pathlib import Path
 from config import settings
 
-
 class VideoStream:
     def __init__(self, calibration_path: str = None):
         # 환경변수에 등록된 영상 경로 로드
