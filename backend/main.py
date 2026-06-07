@@ -19,7 +19,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-video_stream = VideoStream()
+video_stream = VideoStream(calibration_path="./calibration_data.json")
 detector = PersonDetector()
 
 # 비즈니스 로직을 처리할 서비스 인스턴스 생성
