@@ -9,6 +9,11 @@ from ai.detector import PersonDetector
 from utils.geometry import calculate_positions
 from services.stream_service import StreamService  # 모듈화 서비스 임포트
 
+# 라우터 임포트
+from routers import stats
+from routers import calibration
+from routers import metrics
+
 app = FastAPI(title="Shepherd-AI 관제 서버", version="1.0.0")
 
 app.add_middleware(
@@ -24,6 +29,11 @@ detector = PersonDetector()
 
 # 비즈니스 로직을 처리할 서비스 인스턴스 생성
 stream_service = StreamService(video_stream, detector, calculate_positions)
+
+# 라우터 등록
+app.include_router(stats.router)
+app.include_router(calibration.router)
+app.include_router(metrics.router)
 
 @app.on_event("startup")
 async def startup_event():

@@ -3,7 +3,7 @@ import base64
 import cv2
 from concurrent.futures import ThreadPoolExecutor # 스레드 풀 생성
 # 기존 임포트 그대로 유지
-# from database.influx_client import db_manager 
+from database.influx_client import db_manager 
 
 class StreamService:
     def __init__(self, video_stream, detector, calculate_positions):
@@ -48,7 +48,13 @@ class StreamService:
                 ai_result = await loop.run_in_executor(self.executor, self._heavy_ai_inference, frame)
                 if ai_result:
                     self.shared_ai_data = ai_result
-                
+                    db_manager.save_crowd_stats(
+                        facility_name="MainFacility",
+                        location="Zone_A",
+                        camera_id="Cam_01",
+                        count=ai_result["count"]
+                    )
+
                 await asyncio.sleep(0.01)
             except Exception as e:
                 print(f"⚠️ 서비스 백그라운드 AI 에러: {e}")
