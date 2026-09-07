@@ -1,77 +1,112 @@
-import cv2
 import json
-import numpy as np
+import logging
+import threading
 from pathlib import Path
+from typing import Union
+
+import cv2
+import numpy as np
+
 from config import settings
 
+
+logger = logging.getLogger(__name__)
+VideoSource = Union[str, int]
+
+
+def normalize_video_source(source: VideoSource) -> VideoSource:
+    """Convert a numeric source such as VIDEO_PATH=0 into a USB camera index."""
+    if isinstance(source, str) and source.strip().isdigit():
+        return int(source.strip())
+    return source
+
+
 class VideoStream:
-    def __init__(self, calibration_path: str = None):
-        # 환경변수에 등록된 영상 경로 로드
-        self.cap = cv2.VideoCapture(settings.VIDEO_PATH)
+    """Own one OpenCV capture. Only the capture worker may call get_frame()."""
 
-        # 왜곡 보정 파라미터 초기화
-        self._camera_matrix = None
-        self._dist_coeffs = None
-        self._map1 = None  # undistort remap 테이블 X
-        self._map2 = None  # undistort remap 테이블 Y
-        self._calibration_version = None
+    def __init__(
+        self,
+        source: VideoSource | None = None,
+        calibration_path: str | None = None,
+    ):
+        configured_source = settings.VIDEO_PATH if source is None else source
+        self.source = normalize_video_source(configured_source)
+        self.cap = cv2.VideoCapture(self.source)
+        self._owner_thread_id: int | None = None
+        self._camera_matrix: np.ndarray | None = None
+        self._dist_coeffs: np.ndarray | None = None
+        self._map1: np.ndarray | None = None
+        self._map2: np.ndarray | None = None
+        self._calibration_version: str | None = None
 
-        # 캘리브레이션 파일이 있으면 로드
-        if calibration_path and Path(calibration_path).exists():
+        if isinstance(self.source, int):
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, settings.FRAME_WIDTH)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.FRAME_HEIGHT)
+            self.cap.set(cv2.CAP_PROP_FPS, settings.CAPTURE_FPS)
+
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Cannot open video source: {self.source}")
+
+        if calibration_path and Path(calibration_path).is_file():
             self.load_calibration(calibration_path)
 
-    def load_calibration(self, calibration_path: str):
-        """
-        JSON 캘리브레이션 파일을 로드하고 undistort remap 테이블을 미리 계산합니다.
-        (initUndistortRectifyMap으로 사전 계산 → get_frame 호출 시 remap만 수행)
-        """
-        with open(calibration_path, "r") as f:
-            data = json.load(f)
+    def load_calibration(self, calibration_path: str) -> None:
+        with open(calibration_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
 
-        self._camera_matrix = np.array(data["camera_matrix"], dtype=np.float64)
-        self._dist_coeffs = np.array(data["dist_coeffs"], dtype=np.float64)
+        self._camera_matrix = np.asarray(data["camera_matrix"], dtype=np.float64)
+        self._dist_coeffs = np.asarray(data["dist_coeffs"], dtype=np.float64)
         self._calibration_version = data.get("version", "unknown")
 
-        # 영상 크기 기준으로 remap 테이블 사전 계산
-        w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if width <= 0 or height <= 0:
+            raise RuntimeError("Video source returned an invalid frame size")
 
-        new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
-            self._camera_matrix, self._dist_coeffs, (w, h), alpha=0
+        calibration_size = tuple(data.get("image_size", (width, height)))
+        if calibration_size != (width, height):
+            raise ValueError(
+                "Calibration image size does not match the video source: "
+                f"{calibration_size} != {(width, height)}"
+            )
+
+        new_matrix, _ = cv2.getOptimalNewCameraMatrix(
+            self._camera_matrix,
+            self._dist_coeffs,
+            (width, height),
+            alpha=0,
         )
         self._map1, self._map2 = cv2.initUndistortRectifyMap(
-            self._camera_matrix, self._dist_coeffs, None, new_camera_matrix, (w, h), cv2.CV_32FC1
+            self._camera_matrix,
+            self._dist_coeffs,
+            None,
+            new_matrix,
+            (width, height),
+            cv2.CV_32FC1,
         )
-
-        print(f"✅ 캘리브레이션 로드 완료 (버전: {self._calibration_version})")
+        logger.info("Loaded calibration version %s", self._calibration_version)
 
     @property
-    def is_calibrated(self):
-        return self._map1 is not None
+    def is_calibrated(self) -> bool:
+        return self._map1 is not None and self._map2 is not None
 
     def get_frame(self):
-        """
-        매 프레임을 읽어 반환합니다.
-        캘리브레이션이 로드된 경우 undistort를 적용합니다.
-        영상이 끝나면 처음으로 되돌려 무한 루프를 돕니다.
-        """
-        if not self.cap.isOpened():
-            return None
+        thread_id = threading.get_ident()
+        if self._owner_thread_id is None:
+            self._owner_thread_id = thread_id
+        elif self._owner_thread_id != thread_id:
+            raise RuntimeError("VideoStream must be read by exactly one worker thread")
 
-        ret, frame = self.cap.read()
-        if not ret:
-            # 영상이 끝나면 프레임 인덱스를 0으로 초기화 (무한 루프)
+        ok, frame = self.cap.read()
+        if not ok and isinstance(self.source, str) and settings.VIDEO_LOOP:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ret, frame = self.cap.read()
-
-        if frame is None:
+            ok, frame = self.cap.read()
+        if not ok or frame is None:
             return None
 
-        # 캘리브레이션이 있으면 왜곡 보정 적용 (remap이 가장 빠른 방식)
         if self.is_calibrated:
             frame = cv2.remap(frame, self._map1, self._map2, cv2.INTER_LINEAR)
+        return cv2.resize(frame, (settings.FRAME_WIDTH, settings.FRAME_HEIGHT))
 
-        return frame
-
-    def release(self):
+    def release(self) -> None:
         self.cap.release()

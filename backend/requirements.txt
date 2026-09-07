@@ -1,7 +1,8 @@
 fastapi
-uvicorn[standard]
-ultralytics
-opencv-python
 influxdb-client
+numpy
+opencv-python
 python-dotenv
 python-multipart
+ultralytics
+uvicorn[standard]

@@ -41,12 +41,19 @@ function CCTVViewer() {
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           
-          // 5. 바인딩된 Bounding Box가 있다면 이 위에 바로 그리기
-          if (metaData.boxes) {
+          // 5. 새 프로토콜의 detection 객체에서 Bounding Box를 읽음
+          if (metaData.detections) {
             ctx.strokeStyle = '#00FF00'; // 초록색 박스
             ctx.lineWidth = 2;
-            metaData.boxes.forEach(([x1, y1, x2, y2]) => {
-              ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+            const scaleX = canvas.width / metaData.width;
+            const scaleY = canvas.height / metaData.height;
+            metaData.detections.forEach(({ box: [x1, y1, x2, y2] }) => {
+              ctx.strokeRect(
+                x1 * scaleX,
+                y1 * scaleY,
+                (x2 - x1) * scaleX,
+                (y2 - y1) * scaleY,
+              );
             });
           }
         };

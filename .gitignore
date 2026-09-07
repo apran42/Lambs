@@ -2,10 +2,14 @@
 __pycache__/
 .venv/
 .env
+backend/roi_config.json
+backend/camera_configs/*-roi.json
+!backend/camera_configs/*.example.json
 *.py[cod]
 
 *.pt
 *.engine
+shepherd-ai-phase1.zip
 
 # Node.js
 frontend/node_modules/

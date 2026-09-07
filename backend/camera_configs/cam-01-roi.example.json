@@ -1,0 +1,18 @@
+{
+  "camera_id": "cam-01",
+  "roi_points_normalized": [
+    [0.0, 0.0],
+    [1.0, 0.0],
+    [1.0, 1.0],
+    [0.0, 1.0]
+  ],
+  "zone_width_m": 3.0,
+  "zone_height_m": 3.0,
+  "grid_rows": 3,
+  "grid_cols": 3,
+  "local_window_width_m": 1.0,
+  "local_window_height_m": 1.0,
+  "local_window_step_m": 0.1,
+  "relaxed_max": 2.0,
+  "danger_min": 5.0
+}

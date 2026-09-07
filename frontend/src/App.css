@@ -208,6 +208,58 @@ body {
   color: #f87171;
 }
 
+.multi-camera-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.camera-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.camera-feed-card {
+  min-width: 0;
+}
+
+.feed-metrics {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.calibration-note {
+  color: #9ca3af;
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: left;
+}
+
+@media (max-width: 1100px) {
+  .multi-camera-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .camera-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cctv-status-caution {
+  border: 1px solid #eab308;
+  background-color: rgba(234, 179, 8, 0.2);
+  color: #fde047;
+}
+
 .canvas-wrapper {
   width: 100%;
   background-color: black;
@@ -324,6 +376,12 @@ body {
   color: #9ca3af;
   width: 64px;
   text-align: right;
+}
+
+.forecast-line {
+  margin-top: 8px;
+  color: #94a3b8;
+  font-size: 12px;
 }
 
 .camera-badge {

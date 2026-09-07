@@ -1,74 +1,118 @@
-import asyncio
 import json
+import logging
 import struct
-from fastapi import FastAPI, WebSocket
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from ai.camera import VideoStream
 from ai.detector import PersonDetector
+from config import settings
+from database.influx_client import db_manager
+from routers import calibration, metrics, roi, stats
+from services.camera_registry import load_camera_definitions
+from services.multi_camera_service import MultiCameraService
 from utils.geometry import calculate_positions
-from services.stream_service import StreamService  # 모듈화 서비스 임포트
 
-# 라우터 임포트
-from routers import stats
-from routers import calibration
-from routers import metrics
 
-app = FastAPI(title="Shepherd-AI 관제 서버", version="1.0.0")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    definitions = load_camera_definitions()
+    detector = PersonDetector()
+    service = MultiCameraService(
+        definitions,
+        detector,
+        calculate_positions,
+        db_manager,
+    )
+    app.state.multi_camera_service = service
+    app.state.default_camera_id = definitions[0].camera_id
+    await service.start()
+    try:
+        yield
+    finally:
+        await service.stop()
+        db_manager.close()
+
+
+app = FastAPI(
+    title="Shepherd-AI 관제 서버",
+    version="1.1.0",
+    lifespan=lifespan,
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=list(settings.CORS_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-video_stream = VideoStream(calibration_path="./calibration_data.json")
-detector = PersonDetector()
-
-# 비즈니스 로직을 처리할 서비스 인스턴스 생성
-stream_service = StreamService(video_stream, detector, calculate_positions)
-
-# 라우터 등록
 app.include_router(stats.router)
 app.include_router(calibration.router)
 app.include_router(metrics.router)
+app.include_router(roi.router)
 
-@app.on_event("startup")
-async def startup_event():
-    # 백그라운드 AI 워커 구동 체계를 서비스 내부 함수로 깔끔하게 위임하여 실행
-    asyncio.create_task(stream_service.start_background_ai_worker())
 
 @app.get("/")
 async def root():
-    return {"message": "Shepherd-AI 관제 서버가 정상 구동 중입니다."}
+    return {
+        "message": "Shepherd-AI 관제 서버가 정상 구동 중입니다.",
+        "camera_ids": app.state.multi_camera_service.camera_ids,
+    }
 
-# ==========================================
-# 💡 메인 루프: AI 연산에 절대 간섭받지 않는 초고속 송출 채널
-# ==========================================
+
+@app.get("/health")
+async def health():
+    return app.state.multi_camera_service.health()
+
+
+@app.get("/api/cameras")
+async def cameras():
+    return app.state.multi_camera_service.health()
+
+
+@app.get("/api/forecast/{camera_id}")
+async def camera_forecast(camera_id: str):
+    try:
+        forecast = app.state.multi_camera_service.get_forecast(camera_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown camera id") from exc
+    if forecast is None:
+        return {"camera_id": camera_id, "status": "warming_up", "data": None}
+    return {"camera_id": camera_id, "status": "ok", "data": forecast}
+
 
 @app.websocket("/ws/stream")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
+    await stream_camera(websocket, websocket.app.state.default_camera_id)
 
+
+@app.websocket("/ws/stream/{camera_id}")
+async def camera_websocket_endpoint(websocket: WebSocket, camera_id: str):
+    await stream_camera(websocket, camera_id)
+
+
+async def stream_camera(websocket: WebSocket, camera_id: str):
+    await websocket.accept()
+    last_frame_id = 0
+    service: MultiCameraService = websocket.app.state.multi_camera_service
+    if camera_id not in service.camera_ids:
+        await websocket.close(code=1008, reason="Unknown camera id")
+        return
     try:
         while True:
-            # 서비스 모듈에서 기존 로직 그대로 처리된 결과를 받아옴
-            image_bytes, payload = stream_service.get_optimized_streaming_frame()
-            
-            if payload is None:
-                await asyncio.sleep(0.1)
+            packet = await service.wait_for_packet(camera_id, last_frame_id)
+            if packet is None:
                 continue
-            
-            # 구조체 바이너리 패킹 작업 (Base64 성능 저하 방지)
-            json_bytes = json.dumps(payload).encode('utf-8')
-            json_length = len(json_bytes)
-
-            packet = struct.pack(f"!I", json_length) + json_bytes + image_bytes
-            await websocket.send_bytes(packet)
-            
-            await asyncio.sleep(0.05) # 약 20fps 주기 싱크 조정
-            
-    except Exception as e:
-        print(f"⚠️ 스트리밍 Websocket 종료: {e}")
+            last_frame_id = packet.frame_id
+            json_bytes = json.dumps(packet.metadata).encode("utf-8")
+            payload = struct.pack("!I", len(json_bytes)) + json_bytes + packet.image_bytes
+            await websocket.send_bytes(payload)
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected")
+    except Exception:
+        logger.exception("WebSocket stream ended unexpectedly")
