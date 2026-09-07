@@ -1,89 +1,252 @@
 import asyncio
-import base64
+import contextlib
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Callable
+
 import cv2
-from concurrent.futures import ThreadPoolExecutor # 스레드 풀 생성
-# 기존 임포트 그대로 유지
-from database.influx_client import db_manager 
+
+from config import settings
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FrameSnapshot:
+    frame_id: int
+    captured_at: str
+    frame: Any
+
+
+@dataclass(frozen=True)
+class StreamPacket:
+    frame_id: int
+    image_bytes: bytes
+    metadata: dict
+
 
 class StreamService:
-    def __init__(self, video_stream, detector, calculate_positions):
+    """Single-producer capture/inference pipeline shared by every client."""
+
+    def __init__(
+        self,
+        video_stream,
+        detector,
+        calculate_positions: Callable,
+        db_manager=None,
+        density_analyzer=None,
+        *,
+        camera_id: str | None = None,
+        facility_name: str | None = None,
+        location: str | None = None,
+    ) -> None:
         self.video_stream = video_stream
         self.detector = detector
         self.calculate_positions = calculate_positions
+        self.db_manager = db_manager
+        self.density_analyzer = density_analyzer
+        self.camera_id = camera_id or settings.CAMERA_ID
+        self.facility_name = facility_name or settings.FACILITY_NAME
+        self.location = location or settings.CAMERA_LOCATION
+        self._capture_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix=f"capture-{self.camera_id}"
+        )
+        self._inference_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix=f"inference-{self.camera_id}"
+        )
+        self._frame_condition = asyncio.Condition()
+        self._packet_condition = asyncio.Condition()
+        self._latest_frame: FrameSnapshot | None = None
+        self._latest_packet: StreamPacket | None = None
+        self._tasks: list[asyncio.Task] = []
+        self._stopping = False
+        self._last_db_write = 0.0
+        self._last_error: str | None = None
 
-        # AI 연산을 위한 독립 스레드 풀
-        self.executor = ThreadPoolExecutor(max_workers=1)
+    async def start(self) -> None:
+        if self._tasks:
+            return
+        self._stopping = False
+        self._tasks = [
+            asyncio.create_task(
+                self._capture_worker(), name=f"capture-{self.camera_id}"
+            ),
+            asyncio.create_task(
+                self._inference_worker(), name=f"inference-{self.camera_id}"
+            ),
+        ]
+        logger.info("Stream pipeline started for %s", self.camera_id)
 
-        # 실시간 AI 스냅샷 공유 변수
-        self.shared_ai_data = {
-            "count": 0,
-            "boxes": [],
-            "status": "Normal"
-        }
+    async def stop(self) -> None:
+        self._stopping = True
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._tasks.clear()
+        self.video_stream.release()
+        self._capture_executor.shutdown(wait=True, cancel_futures=True)
+        self._inference_executor.shutdown(wait=True, cancel_futures=True)
+        logger.info("Stream pipeline stopped for %s", self.camera_id)
 
-    # AI 연산은 동기 메서드로
-    def _heavy_ai_inference(self, frame):
-            if frame is None:
-                return None
-            results = self.detector.track_objects(frame)
-            processed_boxes = self.calculate_positions(results)
-            return {
-                "count": len(processed_boxes),
-                "boxes": processed_boxes,
-                "status": "Crowded" if len(processed_boxes) > 10 else "Normal",
-            }
-
-    # 백그라운드에서 메인 루프 간섭 없이 AI만 무한히
-    async def start_background_ai_worker(self):
+    async def _capture_worker(self) -> None:
         loop = asyncio.get_running_loop()
-        print("🚀 StreamService 내부 격리형 AI 워커 가동")
-        while True:
+        frame_id = 0
+        interval = 1.0 / max(settings.CAPTURE_FPS, 1.0)
+        while not self._stopping:
+            started = time.monotonic()
             try:
-                frame = self.video_stream.get_frame()
+                frame = await loop.run_in_executor(
+                    self._capture_executor, self.video_stream.get_frame
+                )
                 if frame is None:
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.1)
                     continue
-                
-                # 🔥 스레드 풀로 무거운 추론 연산 격리 유도
-                ai_result = await loop.run_in_executor(self.executor, self._heavy_ai_inference, frame)
-                if ai_result:
-                    self.shared_ai_data = ai_result
-                    db_manager.save_crowd_stats(
-                        facility_name="MainFacility",
-                        location="Zone_A",
-                        camera_id="Cam_01",
-                        count=ai_result["count"]
-                    )
+                frame_id += 1
+                snapshot = FrameSnapshot(
+                    frame_id=frame_id,
+                    captured_at=datetime.now(timezone.utc).isoformat(),
+                    frame=frame,
+                )
+                async with self._frame_condition:
+                    self._latest_frame = snapshot
+                    self._frame_condition.notify_all()
+                self._last_error = None
+                await asyncio.sleep(max(0.0, interval - (time.monotonic() - started)))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._last_error = f"capture: {exc}"
+                logger.exception("Capture worker failed for %s", self.camera_id)
+                await asyncio.sleep(0.5)
 
-                await asyncio.sleep(0.01)
-            except Exception as e:
-                print(f"⚠️ 서비스 백그라운드 AI 에러: {e}")
-                await asyncio.sleep(1)
+    async def _next_frame(self, after_frame_id: int) -> FrameSnapshot:
+        async with self._frame_condition:
+            await self._frame_condition.wait_for(
+                lambda: self._stopping
+                or (
+                    self._latest_frame is not None
+                    and self._latest_frame.frame_id > after_frame_id
+                )
+            )
+            if self._stopping or self._latest_frame is None:
+                raise asyncio.CancelledError
+            return self._latest_frame
 
-    # 💡 웹소켓 송출용 초고속 프레임 패키징 함수 (바이너리 원본 보존 + 즉석 드로잉)
-    def get_optimized_streaming_frame(self):
-        frame = self.video_stream.get_frame()
-        if frame is None:
-            return None, None
+    def _infer_and_encode(self, snapshot: FrameSnapshot) -> StreamPacket:
+        results = self.detector.track_objects(snapshot.frame)
+        detections = self.calculate_positions(results)
+        ok, buffer = cv2.imencode(
+            ".jpg",
+            snapshot.frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), settings.JPEG_QUALITY],
+        )
+        if not ok:
+            raise RuntimeError("JPEG encoding failed")
 
-        # 백그라운드 AI가 가공해 둔 가장 최신의 깨끗한 좌표 데이터 가져오기
-        current_boxes = self.shared_ai_data.get("boxes", [])
-        
-        # 30fps 원본 스트림 위에 즉석에서 가볍게 박스 드로잉 (메모리 카피 제로)
-        for box in current_boxes:
-            x1, y1, x2, y2 = map(int, box)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, "Person", (x1, y1 - 10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-        # 압축 연산 진행
-        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
-        _, buffer = cv2.imencode('.jpg', frame, encode_param)
-        
-        meta_payload = {
-            "count": self.shared_ai_data["count"],
-            "boxes": current_boxes,
-            "status": self.shared_ai_data["status"]
+        count = len(detections)
+        density = (
+            self.density_analyzer.analyze(
+                detections,
+                frame_width=int(snapshot.frame.shape[1]),
+                frame_height=int(snapshot.frame.shape[0]),
+            )
+            if self.density_analyzer is not None
+            else {
+                "roi_count": count,
+                "density_people_per_m2": None,
+                "density_level": "Unavailable",
+                "grid": [],
+                "local_peak": None,
+            }
+        )
+        metadata = {
+            "protocol_version": 1,
+            "camera_id": self.camera_id,
+            "frame_id": snapshot.frame_id,
+            "captured_at": snapshot.captured_at,
+            "processed_at": datetime.now(timezone.utc).isoformat(),
+            "width": int(snapshot.frame.shape[1]),
+            "height": int(snapshot.frame.shape[0]),
+            "count": count,
+            "status": density.get("risk_level", density["density_level"]),
+            "detections": detections,
+            **density,
         }
-        
-        return buffer.tobytes(), meta_payload
+        return StreamPacket(snapshot.frame_id, buffer.tobytes(), metadata)
+
+    async def _inference_worker(self) -> None:
+        loop = asyncio.get_running_loop()
+        last_frame_id = 0
+        while not self._stopping:
+            try:
+                snapshot = await self._next_frame(last_frame_id)
+                last_frame_id = snapshot.frame_id
+                packet = await loop.run_in_executor(
+                    self._inference_executor, self._infer_and_encode, snapshot
+                )
+                async with self._packet_condition:
+                    self._latest_packet = packet
+                    self._packet_condition.notify_all()
+                self._write_metric_if_due(packet)
+                self._last_error = None
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._last_error = f"inference: {exc}"
+                logger.exception("Inference worker failed for %s", self.camera_id)
+                await asyncio.sleep(0.2)
+
+    def _write_metric_if_due(self, packet: StreamPacket) -> None:
+        if self.db_manager is None:
+            return
+        now = time.monotonic()
+        if now - self._last_db_write < settings.DB_WRITE_INTERVAL_SECONDS:
+            return
+        self._last_db_write = now
+        self.db_manager.save_crowd_stats(
+            facility_name=self.facility_name,
+            location=self.location,
+            camera_id=self.camera_id,
+            count=packet.metadata["count"],
+            roi_count=packet.metadata.get("roi_count"),
+            density=packet.metadata.get("density_people_per_m2"),
+            density_level=packet.metadata.get("density_level"),
+        )
+
+    async def wait_for_packet(
+        self, after_frame_id: int = 0, timeout: float = 2.0
+    ) -> StreamPacket | None:
+        async def wait() -> StreamPacket:
+            async with self._packet_condition:
+                await self._packet_condition.wait_for(
+                    lambda: self._stopping
+                    or (
+                        self._latest_packet is not None
+                        and self._latest_packet.frame_id > after_frame_id
+                    )
+                )
+                if self._stopping or self._latest_packet is None:
+                    raise asyncio.CancelledError
+                return self._latest_packet
+
+        try:
+            return await asyncio.wait_for(wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+
+    def health(self) -> dict:
+        return {
+            "camera_id": self.camera_id,
+            "running": bool(self._tasks) and not self._stopping,
+            "last_frame_id": self._latest_frame.frame_id if self._latest_frame else None,
+            "last_processed_frame_id": (
+                self._latest_packet.frame_id if self._latest_packet else None
+            ),
+            "last_error": self._last_error,
+        }

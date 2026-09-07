@@ -1,276 +1,289 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { Activity, Clock, Camera, Users, AlertTriangle } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
 
-export default function App() {
-  const [data, setData] = useState({ count: 0, status: 'Normal' });
-  const [connected, setConnected] = useState(false);
-  const [currentTime, setCurrentTime] = useState(new Date());
-  
-  // 가상 DOM을 거치지 않고 Canvas에 직접 접근하기 위한 Ref
+const WS_BASE = import.meta.env.VITE_WS_BASE_URL
+  || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:8000/ws/stream`;
+const API_BASE = import.meta.env.VITE_API_BASE_URL
+  || `${window.location.protocol}//${window.location.hostname}:8000`;
+
+const DEFAULT_CAMERAS = [
+  { id: 'cam-01', name: 'CAM 01' },
+  { id: 'cam-02', name: 'CAM 02' },
+];
+
+const LEVEL_TEXT = { Relaxed: '여유', Caution: '주의', Danger: '위험' };
+const LEVEL_BADGE = { Relaxed: 'level-green', Caution: 'level-yellow', Danger: 'level-red' };
+const LEVEL_STATUS = {
+  Relaxed: 'cctv-status-normal',
+  Caution: 'cctv-status-caution',
+  Danger: 'cctv-status-danger',
+};
+
+function CameraFeed({ camera, onMetrics }) {
   const canvasRef = useRef(null);
-  // 메모리 가비지 컬렉션 부하를 방지하기 위해 단 하나의 이미지 객체만 박제하여 사용
-  const imgRef = useRef(null);
-  const boxesRef = useRef([]);
+  const [connected, setConnected] = useState(false);
+  const [metadata, setMetadata] = useState(null);
 
-  // 우측 '카메라별 혼잡도 분석'에 보여줄 카메라 목록 (고정값)
-  const [cameras, setCameras] = useState([
-    { id: 'cam-01', name: 'CAM 01', capacity: 80, current: 0 },
-  ]);
+  useEffect(() => {
+    let socket;
+    let reconnectTimer;
+    let disposed = false;
+    let newestMessage = 0;
 
-  // 상단 시계 업데이트
+    const drawPacket = async (buffer) => {
+      if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 4) {
+        throw new Error('Invalid stream packet');
+      }
+      const view = new DataView(buffer);
+      const jsonLength = view.getUint32(0, false);
+      if (jsonLength > buffer.byteLength - 4) {
+        throw new Error('Invalid metadata length');
+      }
+
+      const jsonBytes = new Uint8Array(buffer, 4, jsonLength);
+      const nextMetadata = JSON.parse(new TextDecoder().decode(jsonBytes));
+      const messageId = ++newestMessage;
+      setMetadata(nextMetadata);
+      onMetrics(camera.id, { ...nextMetadata, connected: true });
+
+      const imageBytes = new Uint8Array(buffer, 4 + jsonLength);
+      const bitmap = await createImageBitmap(new Blob([imageBytes], { type: 'image/jpeg' }));
+      if (disposed || messageId !== newestMessage) {
+        bitmap.close();
+        return;
+      }
+
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        bitmap.close();
+        return;
+      }
+      const context = canvas.getContext('2d');
+      const sourceWidth = Number(nextMetadata.width) || bitmap.width;
+      const sourceHeight = Number(nextMetadata.height) || bitmap.height;
+      const scaleX = canvas.width / sourceWidth;
+      const scaleY = canvas.height / sourceHeight;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+
+      const drawPolygon = (points, strokeStyle, lineWidth = 1) => {
+        if (!Array.isArray(points) || points.length < 3) return;
+        context.beginPath();
+        context.moveTo(points[0][0] * scaleX, points[0][1] * scaleY);
+        points.slice(1).forEach(([x, y]) => context.lineTo(x * scaleX, y * scaleY));
+        context.closePath();
+        context.strokeStyle = strokeStyle;
+        context.lineWidth = lineWidth;
+        context.stroke();
+      };
+
+      nextMetadata.grid?.forEach((cell) => {
+        drawPolygon(cell.polygon, 'rgba(255, 255, 255, 0.45)');
+        const centerX = cell.polygon.reduce((sum, point) => sum + point[0], 0) / cell.polygon.length;
+        const centerY = cell.polygon.reduce((sum, point) => sum + point[1], 0) / cell.polygon.length;
+        context.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        context.font = '12px sans-serif';
+        context.textAlign = 'center';
+        context.fillText(`#${cell.id} ${cell.count}명`, centerX * scaleX, centerY * scaleY);
+      });
+      drawPolygon(nextMetadata.roi_points, '#22d3ee', 2);
+      if (nextMetadata.local_peak_enabled) {
+        drawPolygon(nextMetadata.local_peak?.polygon, '#fb923c', 3);
+      }
+
+      nextMetadata.detections?.forEach((detection) => {
+        if (!Array.isArray(detection.box) || detection.box.length !== 4) return;
+        const [x1, y1, x2, y2] = detection.box;
+        const left = x1 * scaleX;
+        const top = y1 * scaleY;
+        const width = (x2 - x1) * scaleX;
+        const height = (y2 - y1) * scaleY;
+        context.strokeStyle = detection.in_roi ? '#a855f7' : '#6b7280';
+        context.fillStyle = detection.in_roi ? '#22c55e' : '#6b7280';
+        context.lineWidth = 2;
+        context.strokeRect(left, top, width, height);
+        context.beginPath();
+        context.arc(left + width / 2, top + height, 4, 0, 2 * Math.PI);
+        context.fill();
+      });
+    };
+
+    const connect = () => {
+      socket = new WebSocket(`${WS_BASE}/${camera.id}`);
+      socket.binaryType = 'arraybuffer';
+      socket.onopen = () => setConnected(true);
+      socket.onmessage = (event) => {
+        drawPacket(event.data).catch((error) => console.error(`${camera.id} packet error:`, error));
+      };
+      socket.onerror = () => socket.close();
+      socket.onclose = () => {
+        setConnected(false);
+        onMetrics(camera.id, { connected: false });
+        if (!disposed) reconnectTimer = window.setTimeout(connect, 1500);
+      };
+    };
+
+    connect();
+    return () => {
+      disposed = true;
+      newestMessage += 1;
+      window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
+  }, [camera.id, onMetrics]);
+
+  useEffect(() => {
+    if (connected) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#111';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#777';
+    context.font = '20px sans-serif';
+    context.textAlign = 'center';
+    context.fillText('서버 연결 대기 중...', canvas.width / 2, canvas.height / 2);
+  }, [connected]);
+
+  const level = metadata?.risk_level || 'Unavailable';
+  return (
+    <div className="card camera-feed-card">
+      <div className="cctv-header">
+        <h2 className="cctv-title">{camera.name}</h2>
+        <div className="cctv-stats">
+          <span className="cctv-count">ROI <strong>{metadata?.roi_count || 0}명</strong></span>
+          <span className={`cctv-status ${LEVEL_STATUS[level] || 'cctv-status-normal'}`}>
+            {LEVEL_TEXT[level] || '분석 대기'}
+          </span>
+        </div>
+      </div>
+      <div className="canvas-wrapper">
+        <canvas ref={canvasRef} width={640} height={480} className="canvas-element" />
+      </div>
+      <div className="feed-metrics">
+        <span>영상 {Number(metadata?.capture_fps || 0).toFixed(1)} FPS</span>
+        <span>AI {Number(metadata?.analysis_fps || 0).toFixed(1)} FPS</span>
+        <span>고정 그리드 최대 {Number(metadata?.max_grid_density_people_per_m2 || 0).toFixed(2)} 명/㎡</span>
+        <span>
+          5분 예측 {metadata?.forecast_5m?.predicted_roi_count ?? '-'}명
+          {metadata?.forecast_5m && ` (${metadata.forecast_5m.confidence_label})`}
+        </span>
+        <span>분석 지연 {metadata?.analysis_lag_frames ?? '-'} frames</span>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [cameraMetrics, setCameraMetrics] = useState({});
+  const [cameras, setCameras] = useState(DEFAULT_CAMERAS);
+
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // 웹소켓 바이너리 연결 및 순수 Canvas 렌더링 로직
   useEffect(() => {
-    if (!imgRef.current) {
-      imgRef.current = new Image();
-    }
-
-    let ws = null;
-    try {
-      ws = new WebSocket('ws://localhost:8000/ws/stream');
-      ws.binaryType = "arraybuffer"; 
-      
-      ws.onopen = () => setConnected(true);
-      ws.onclose = () => setConnected(false);
-      
-      ws.onmessage = (event) => {
-        try {
-          const buffer = event.data;
-          const view = new DataView(buffer);
-          
-          // 1. 하이브리드 바이너리 패킷 압축 해제
-          const jsonLength = view.getUint32(0, false);
-          const jsonBytes = new Uint8Array(buffer, 4, jsonLength);
-          const jsonText = new TextDecoder().decode(jsonBytes);
-          const metaData = JSON.parse(jsonText);
-          
-          // 2. React 상태 업데이트 (UI 갱신용)
-          setData({ count: metaData.count, status: metaData.status });
-          boxesRef.current = metaData.boxes || [];
-          
-          // CAM 01의 현재 인원수 실시간 업데이트
-          setCameras(prev => {
-            const newCameras = [...prev];
-            newCameras[0].current = metaData.count;
-            return newCameras;
-          });
-
-          // 3. 이미지 블롭 생성 및 Canvas 그리기
-          const imageBytes = new Uint8Array(buffer, 4 + jsonLength);
-          const imageBlob = new Blob([imageBytes], { type: 'image/jpeg' });
-          const blobUrl = URL.createObjectURL(imageBlob);
-          
-          imgRef.current.src = blobUrl;
-          imgRef.current.onload = () => {
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-            const ctx = canvas.getContext('2d');
-            
-            // 영상 프레임 그리기
-            ctx.clearRect(0, 0, 640, 480);
-            ctx.drawImage(imgRef.current, 0, 0, 640, 480);
-            
-            // 바운딩 박스 덧그리기 (GPU 가속)
-            ctx.strokeStyle = "#a855f7"; // 테두리 색상 (보라색)
-            ctx.lineWidth = 2;
-            
-            boxesRef.current.forEach((box) => {
-              // 백엔드가 [x1, y1, x2, y2] 형태로 보냄
-              const w = box[2] - box[0];
-              const h = box[3] - box[1];
-              ctx.strokeRect(box[0], box[1], w, h);
-              
-              // 풋포인트
-              ctx.fillStyle = "#22c55e"; // 초록색
-              ctx.beginPath();
-              ctx.arc(box[0] + (w / 2), box[3], 4, 0, 2 * Math.PI);
-              ctx.fill();
-            });
-            
-            // 메모리 누수 방지
-            URL.revokeObjectURL(blobUrl);
-          };
-        } catch (e) {
-          console.error("데이터 파싱 오류:", e);
+    fetch(`${API_BASE}/api/cameras`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`Camera API returned ${response.status}`);
+        return response.json();
+      })
+      .then((payload) => {
+        if (Array.isArray(payload.cameras) && payload.cameras.length) {
+          setCameras(payload.cameras.map((camera) => ({
+            id: camera.camera_id,
+            name: camera.name || camera.camera_id,
+          })));
         }
-      };
-    } catch (err) {
-      console.warn("웹소켓 연결 오류", err);
-    }
-
-    return () => {
-      if (ws) {
-        try { ws.close(); } catch(e) {}
-      }
-    };
+      })
+      .catch((error) => console.warn('카메라 목록을 불러오지 못했습니다:', error));
   }, []);
 
-  // 서버 미연결 시 정적 캔버스 그리기 (랜덤 데이터 제거)
-  useEffect(() => {
-    if (connected) return;
-    
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    
-    // 배경 그리기
-    ctx.fillStyle = '#111';
-    ctx.fillRect(0, 0, 640, 480);
-    
-    ctx.strokeStyle = '#333';
-    ctx.setLineDash([5, 5]);
-    ctx.beginPath();
-    ctx.moveTo(0, 240); ctx.lineTo(640, 240);
-    ctx.moveTo(320, 0); ctx.lineTo(320, 480);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    
-    // 대기 중 텍스트 표시
-    ctx.fillStyle = '#555';
-    ctx.font = '20px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('서버 연결 대기 중...', 320, 240);
-    
-  }, [connected]);
+  const updateMetrics = useCallback((cameraId, next) => {
+    setCameraMetrics((previous) => ({
+      ...previous,
+      [cameraId]: { ...previous[cameraId], ...next },
+    }));
+  }, []);
 
-  // CSS 클래스 매핑 함수 (인라인 스타일 대신 클래스 사용)
-  const getCongestionLevel = (current, capacity) => {
-    const ratio = current / capacity;
-    if (ratio < 0.5) return { text: '여유', badgeClass: 'level-green', barClass: 'progress-green' }; 
-    if (ratio < 0.8) return { text: '보통', badgeClass: 'level-yellow', barClass: 'progress-yellow' }; 
-    return { text: '혼잡', badgeClass: 'level-red', barClass: 'progress-red' }; 
-  };
+  const connectedCount = cameras.filter((camera) => cameraMetrics[camera.id]?.connected).length;
 
   return (
     <div className="app-container">
-        
-        {/* 1. 상단 헤더 */}
-        <header className="header">
-          <div className="header-title-wrapper">
-            <div className="header-icon">
-              <Activity size={24} color="white" />
-            </div>
-            <div>
-              <h1 className="header-title">지능형 영상 기반 혼잡도 모니터링</h1>
-              <p className="header-subtitle">Edge AI & Binary Hybrid Streaming</p>
-            </div>
+      <header className="header">
+        <div className="header-title-wrapper">
+          <div className="header-icon">AI</div>
+          <div>
+            <h1 className="header-title">다중 영상 혼잡도 모니터링</h1>
+            <p className="header-subtitle">원본 시점 스트리밍 · Bird-eye 좌표 기반 ㎡ 밀도</p>
           </div>
-          
-          <div className="header-status-wrapper">
-            <div className="clock">
-              <Clock size={16} />
-              {currentTime.toLocaleTimeString('ko-KR')}
-            </div>
-            {connected ? (
-              <div className="status-badge status-connected">
-                <div className="status-dot-connected"></div>
-                <span className="status-text-connected">서버 연결됨</span>
-              </div>
-            ) : (
-               <div className="status-badge status-disconnected">
-                 <div className="status-dot-disconnected"></div>
-                 <span className="status-text-disconnected">시뮬레이션 모드 (연결 대기중)</span>
-               </div>
-            )}
+        </div>
+        <div className="header-status-wrapper">
+          <div className="clock">{currentTime.toLocaleTimeString('ko-KR')}</div>
+          <div className={`status-badge ${connectedCount ? 'status-connected' : 'status-disconnected'}`}>
+            <div className={connectedCount ? 'status-dot-connected' : 'status-dot-disconnected'} />
+            <span className={connectedCount ? 'status-text-connected' : 'status-text-disconnected'}>
+              {connectedCount}/{cameras.length} 영상 연결
+            </span>
           </div>
-        </header>
+        </div>
+      </header>
 
-        {/* 2. 메인 콘텐츠 영역 */}
-        <div className="main-content">
-          
-          {/* 좌측 패널 (CCTV 영상) */}
-          <div className="left-panel">
-            <div className="card">
-              
-              {/* 영상 상단 타이틀 및 상태 */}
-              <div className="cctv-header">
-                <h2 className="cctv-title">
-                  <Camera size={20} color="#c084fc" />
-                  CAM 01 실시간 모니터링
-                </h2>
-                
-                <div className="cctv-stats">
-                  <span className="cctv-count">
-                    탐지 인원: <strong>{data.count}명</strong>
-                  </span>
-                  <span className={`cctv-status ${data.count > 30 ? 'cctv-status-danger' : 'cctv-status-normal'}`}>
-                    {data.status}
-                  </span>
-                </div>
-              </div>
+      <div className="multi-camera-layout">
+        <div className="camera-grid">
+          {cameras.map((camera) => (
+            <CameraFeed key={camera.id} camera={camera} onMetrics={updateMetrics} />
+          ))}
+        </div>
 
-              {/* 순정 Canvas 영상 송출 영역 */}
-              <div className="canvas-wrapper">
-                <canvas 
-                  ref={canvasRef} 
-                  width={640} 
-                  height={480} 
-                  className="canvas-element"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 우측 패널 (통계 및 카메라 리스트) */}
-          <div className="right-panel">
-            
-            {/* 전체 통계 요약 카드 */}
-            <div className="card card-padding-lg">
-              <h2 className="summary-title">실시간 전체 탐지 인원 (CAM 01)</h2>
-              <div className="summary-value-wrapper">
-                <span className="summary-value">{data.count}</span>
-                <span className="summary-unit">명</span>
-              </div>
-              {data.count > 30 && (
-                 <div className="alert-box">
-                   <AlertTriangle size={20} color="#f87171" className="flex-shrink-0" />
-                   <p className="alert-text">주의: 메인 스테이지 밀집도 상승 감지됨</p>
-                 </div>
-              )}
-            </div>
-
-            {/* 카메라별 분석 리스트 */}
-            <div className="card card-padding-lg card-flex-1">
-              <h2 className="list-title">
-                <Users size={20} color="#9ca3af" />
-                카메라별 혼잡도 분석
-              </h2>
-              <div className="camera-list">
-                {cameras.map((camera) => {
-                  const level = getCongestionLevel(camera.current, camera.capacity);
-                  const percent = Math.min(100, Math.round((camera.current / camera.capacity) * 100));
-                  
-                  return (
-                    <div key={camera.id} className="camera-item">
-                      <div className="camera-item-header">
-                        <span className="camera-name">{camera.name}</span>
-                        <div className="camera-stats">
-                          <span className="camera-count">{camera.current} / {camera.capacity}</span>
-                          <span className={`camera-badge ${level.badgeClass}`}>
-                            {level.text}
-                          </span>
-                        </div>
-                      </div>
-                      {/* 진행률 게이지 바 */}
-                      <div className="progress-bg">
-                        <div 
-                          className={`progress-bar ${level.barClass}`}
-                          style={{ width: `${percent}%` }}
-                        ></div>
+        <div className="right-panel">
+          <div className="card card-padding-lg">
+            <h2 className="list-title">카메라별 Bird-eye 밀도</h2>
+            <div className="camera-list">
+              {cameras.map((camera) => {
+                const metrics = cameraMetrics[camera.id] || {};
+                const level = metrics.risk_level || 'Unavailable';
+                const density = Number(metrics.applied_peak_density_people_per_m2 || 0);
+                const forecast = metrics.forecast_5m;
+                const dangerThreshold = Number(metrics.thresholds?.danger_min || 5);
+                return (
+                  <div key={camera.id} className="camera-item">
+                    <div className="camera-item-header">
+                      <span className="camera-name">{camera.name}</span>
+                      <div className="camera-stats">
+                        <span className="camera-count">{density.toFixed(1)} 명/㎡</span>
+                        <span className={`camera-badge ${LEVEL_BADGE[level] || 'level-green'}`}>
+                          {LEVEL_TEXT[level] || '대기'}
+                        </span>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
+                    <div className="forecast-line">
+                      5분 뒤 ROI {forecast?.predicted_roi_count ?? '-'}명 · {' '}
+                      {forecast?.ready ? `신뢰도 ${Math.round(forecast.confidence * 100)}%` : '추세 학습 중'}
+                    </div>
+                    <div className="progress-bg">
+                      <div
+                        className={`progress-bar ${level === 'Danger' ? 'progress-red' : level === 'Caution' ? 'progress-yellow' : 'progress-green'}`}
+                        style={{ width: `${Math.min(100, density / dangerThreshold * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-
+          </div>
+          <div className="card card-padding-lg">
+            <h2 className="summary-title">면적 정확도 조건</h2>
+            <p className="calibration-note">
+              각 카메라의 청록색 ROI 네 점과 촬영 평면의 실측 가로·세로를 입력해야
+              Bird-eye 공간의 1×1 영역을 실제 1㎡로 해석할 수 있습니다.
+            </p>
           </div>
         </div>
       </div>
+    </div>
   );
 }
