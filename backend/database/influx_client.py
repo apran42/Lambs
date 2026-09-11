@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import threading
 from datetime import datetime, timezone

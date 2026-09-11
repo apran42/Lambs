@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
@@ -65,9 +67,19 @@ class CameraRuntime:
 class MultiCameraService:
     """Capture cameras independently and share one batch inference engine."""
 
-    def __init__(self, definitions, detector, calculate_positions, db_manager=None):
+    streaming_available = True
+
+    def __init__(
+        self,
+        definitions,
+        detector,
+        calculate_positions=None,
+        db_manager=None,
+    ):
         cv2.setNumThreads(max(1, settings.OPENCV_THREADS))
         self.detector = detector
+        # Retained as an optional argument for compatibility with older callers.
+        # Detectors now return normalized detection dictionaries directly.
         self.calculate_positions = calculate_positions
         self.db_manager = db_manager
         self.runtimes = {
@@ -114,8 +126,8 @@ class MultiCameraService:
         self._tasks.clear()
         for runtime in self.runtimes.values():
             runtime.video_stream.release()
-            runtime.capture_executor.shutdown(wait=True, cancel_futures=True)
-        self._inference_executor.shutdown(wait=True, cancel_futures=True)
+            runtime.capture_executor.shutdown(wait=True)
+        self._inference_executor.shutdown(wait=True)
         logger.info("Multi-camera pipeline stopped")
 
     @staticmethod
@@ -252,7 +264,7 @@ class MultiCameraService:
             frames = [snapshot.frame for _runtime, snapshot in pending]
             started = time.perf_counter()
             try:
-                results = await loop.run_in_executor(
+                detection_batches = await loop.run_in_executor(
                     self._inference_executor,
                     self.detector.detect_batch,
                     frames,
@@ -260,8 +272,9 @@ class MultiCameraService:
                 elapsed_ms = (time.perf_counter() - started) * 1000
                 completed = time.monotonic()
                 self._inference_times.append(completed)
-                for (runtime, snapshot), result in zip(pending, results):
-                    detections = self.calculate_positions([result])
+                for (runtime, snapshot), detections in zip(
+                    pending, detection_batches
+                ):
                     density = runtime.density_analyzer.analyze(
                         detections,
                         frame_width=int(snapshot.frame.shape[1]),
@@ -378,6 +391,8 @@ class MultiCameraService:
     def health(self) -> dict:
         return {
             "running": bool(self._tasks) and not self._stopping,
+            "mode": "camera-pipeline",
+            "inference": self.detector.health(),
             "shared_inference_batches_per_second": self._inference_fps(),
             "cameras": [
                 {

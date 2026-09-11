@@ -22,6 +22,31 @@ For CPU-only development, `CPU_INFERENCE_THREADS` and `OPENCV_THREADS` reserve
 processing capacity for the independent capture workers. They do not limit a
 future CUDA/TensorRT inference engine.
 
+## Jetson Nano API-only run
+
+The Jetson Python 3.8 API process is deliberately separated from the Python 3.6
+TensorRT worker. Install `requirements-jetson-backend.txt` only in the isolated
+`~/sheperd_runtime/backend_venv38` environment; it excludes torch, Ultralytics,
+TensorRT, CUDA, and OpenCV. Do not install it into a system Python or the existing
+`~/backend_venv`.
+
+Until the worker is implemented, start the copied backend explicitly in API-only
+mode:
+
+```bash
+cd ~/sheperd_runtime/shepherd_backend
+source ~/sheperd_runtime/backend_venv38/bin/activate
+export INFERENCE_BACKEND=unavailable
+python -c "import main"
+uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
+```
+
+`GET /health` then returns `mode: api-only` and `inference.available: false`.
+Camera WebSockets close with code 1013, and ROI/calibration operations that need
+the camera runtime return HTTP 503 instead of crashing application startup. The
+development PC keeps `INFERENCE_BACKEND=ultralytics` and uses the same normalized
+detection contract (`box`, `confidence`, and optional `track_id`).
+
 Density uses the bottom-centre footpoint of each person box. Four normalized ROI
 corners are mapped by a homography to the configurable model plane. The backend
 reports whole-ROI density, fixed-grid cell density, and the maximum density from

@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 from datetime import datetime
-from typing import Annotated
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -15,12 +17,12 @@ class MetricEntry(BaseModel):
     camera_id: str = Field(min_length=1, max_length=100)
     facility: str = Field(min_length=1, max_length=100)
     location: str = Field(min_length=1, max_length=100)
-    timestamp: datetime | None = None
+    timestamp: Optional[datetime] = None
     count: int = Field(ge=0)
 
 
 @router.post("/bulk")
-async def write_metrics_bulk(entries: list[MetricEntry]):
+async def write_metrics_bulk(entries: List[MetricEntry]):
     if len(entries) > 1000:
         raise HTTPException(status_code=413, detail="A batch may contain at most 1000 rows")
     failed = 0
@@ -40,10 +42,13 @@ async def write_metrics_bulk(entries: list[MetricEntry]):
 
 @router.get("/recent")
 async def get_recent_metrics(
-    minutes: Annotated[int, Query(ge=1, le=1440)] = 5,
+    minutes: int = Query(5, ge=1, le=1440),
 ):
     try:
-        data = await asyncio.to_thread(db_manager.get_recent_crowd_stats, minutes)
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(
+            None, db_manager.get_recent_crowd_stats, minutes
+        )
         return {"data": data, "minutes": minutes}
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Metrics storage is unavailable") from exc

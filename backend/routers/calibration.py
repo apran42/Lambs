@@ -1,8 +1,8 @@
 import asyncio
+from functools import partial
 
 from fastapi import APIRouter, HTTPException
 
-from ai.calibration import calibrate_camera
 from config import settings
 
 
@@ -12,10 +12,18 @@ router = APIRouter(prefix="/api/calibration", tags=["calibration"])
 @router.post("/run")
 async def run_calibration():
     try:
-        result = await asyncio.to_thread(
-            calibrate_camera,
-            settings.CALIBRATION_IMAGES_PATH,
-            settings.CALIBRATION_PATH,
+        # Keep OpenCV out of the API-only import path. Calibration is available
+        # only when its optional runtime dependency is installed.
+        from ai.calibration import calibrate_camera
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(
+                calibrate_camera,
+                settings.CALIBRATION_IMAGES_PATH,
+                settings.CALIBRATION_PATH,
+            ),
         )
         if result is None:
             raise HTTPException(
@@ -29,5 +37,10 @@ async def run_calibration():
         }
     except HTTPException:
         raise
+    except ModuleNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Calibration runtime is not installed in API-only mode.",
+        ) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
