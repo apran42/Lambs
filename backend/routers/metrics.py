@@ -1,7 +1,7 @@
+from __future__ import annotations
+
 import asyncio
 from datetime import datetime
-from typing import Annotated
-
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -40,10 +40,13 @@ async def write_metrics_bulk(entries: list[MetricEntry]):
 
 @router.get("/recent")
 async def get_recent_metrics(
-    minutes: Annotated[int, Query(ge=1, le=1440)] = 5,
+    minutes: int = Query(5, ge=1, le=1440),
 ):
     try:
-        data = await asyncio.to_thread(db_manager.get_recent_crowd_stats, minutes)
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(
+            None, db_manager.get_recent_crowd_stats, minutes
+        )
         return {"data": data, "minutes": minutes}
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Metrics storage is unavailable") from exc

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
@@ -46,6 +48,8 @@ class StreamService:
     ) -> None:
         self.video_stream = video_stream
         self.detector = detector
+        # Kept in the constructor for compatibility with older callers. Detector
+        # implementations now return normalized detection dictionaries directly.
         self.calculate_positions = calculate_positions
         self.db_manager = db_manager
         self.density_analyzer = density_analyzer
@@ -90,8 +94,8 @@ class StreamService:
                 await task
         self._tasks.clear()
         self.video_stream.release()
-        self._capture_executor.shutdown(wait=True, cancel_futures=True)
-        self._inference_executor.shutdown(wait=True, cancel_futures=True)
+        self._capture_executor.shutdown(wait=True)
+        self._inference_executor.shutdown(wait=True)
         logger.info("Stream pipeline stopped for %s", self.camera_id)
 
     async def _capture_worker(self) -> None:
@@ -139,8 +143,7 @@ class StreamService:
             return self._latest_frame
 
     def _infer_and_encode(self, snapshot: FrameSnapshot) -> StreamPacket:
-        results = self.detector.track_objects(snapshot.frame)
-        detections = self.calculate_positions(results)
+        detections = self.detector.track_objects(snapshot.frame)
         ok, buffer = cv2.imencode(
             ".jpg",
             snapshot.frame,

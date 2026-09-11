@@ -6,13 +6,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from ai.detector import PersonDetector
+from ai.detector import create_detector
 from config import settings
 from database.influx_client import db_manager
 from routers import calibration, metrics, roi, stats
 from services.camera_registry import load_camera_definitions
-from services.multi_camera_service import MultiCameraService
-from utils.geometry import calculate_positions
 
 
 logging.basicConfig(level=logging.INFO)
@@ -22,13 +20,15 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     definitions = load_camera_definitions()
-    detector = PersonDetector()
-    service = MultiCameraService(
-        definitions,
-        detector,
-        calculate_positions,
-        db_manager,
-    )
+    detector = create_detector()
+    if detector.available:
+        from services.multi_camera_service import MultiCameraService
+
+        service = MultiCameraService(definitions, detector, db_manager=db_manager)
+    else:
+        from services.unavailable_camera_service import UnavailableCameraService
+
+        service = UnavailableCameraService(definitions, detector)
     app.state.multi_camera_service = service
     app.state.default_camera_id = definitions[0].camera_id
     await service.start()
@@ -99,9 +99,12 @@ async def camera_websocket_endpoint(websocket: WebSocket, camera_id: str):
 async def stream_camera(websocket: WebSocket, camera_id: str):
     await websocket.accept()
     last_frame_id = 0
-    service: MultiCameraService = websocket.app.state.multi_camera_service
+    service = websocket.app.state.multi_camera_service
     if camera_id not in service.camera_ids:
         await websocket.close(code=1008, reason="Unknown camera id")
+        return
+    if not service.streaming_available:
+        await websocket.close(code=1013, reason="Inference unavailable")
         return
     try:
         while True:

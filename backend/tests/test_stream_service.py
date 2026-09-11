@@ -39,7 +39,7 @@ class FakeVideoStream:
 
 class FakeDetector:
     def track_objects(self, frame):
-        return frame
+        return fake_positions(frame)
 
 
 def fake_positions(_results):

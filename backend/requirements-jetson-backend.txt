@@ -1,0 +1,8 @@
+# Isolated Python 3.8 API environment for Jetson Nano.
+# Deliberately excludes torch, ultralytics, TensorRT, CUDA, and OpenCV.
+fastapi==0.124.4
+influxdb-client==1.36.1
+numpy==1.24.4
+python-dotenv==1.0.1
+python-multipart==0.0.9
+uvicorn==0.33.0
