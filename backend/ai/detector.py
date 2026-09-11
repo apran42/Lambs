@@ -6,12 +6,15 @@ runtime implementations are imported only after a backend has been selected.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Dict, Protocol
 
 from config import settings
 
 
-Detection = dict[str, Any]
+# Unlike annotations postponed by ``from __future__ import annotations``, a type
+# alias is evaluated as soon as the module is imported.  ``dict[str, Any]`` is
+# therefore not usable on the Jetson API runtime's Python 3.8.
+Detection = Dict[str, Any]
 
 
 class Detector(Protocol):
