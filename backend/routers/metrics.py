@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from typing import List, Optional
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -15,12 +17,12 @@ class MetricEntry(BaseModel):
     camera_id: str = Field(min_length=1, max_length=100)
     facility: str = Field(min_length=1, max_length=100)
     location: str = Field(min_length=1, max_length=100)
-    timestamp: datetime | None = None
+    timestamp: Optional[datetime] = None
     count: int = Field(ge=0)
 
 
 @router.post("/bulk")
-async def write_metrics_bulk(entries: list[MetricEntry]):
+async def write_metrics_bulk(entries: List[MetricEntry]):
     if len(entries) > 1000:
         raise HTTPException(status_code=413, detail="A batch may contain at most 1000 rows")
     failed = 0

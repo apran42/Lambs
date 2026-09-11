@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import List, Tuple
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -11,7 +13,7 @@ router = APIRouter(prefix="/api/roi", tags=["roi-density"])
 
 class ROIConfigUpdate(BaseModel):
     camera_id: str = Field(min_length=1, max_length=100)
-    roi_points_normalized: list[tuple[float, float]] = Field(
+    roi_points_normalized: List[Tuple[float, float]] = Field(
         min_length=4, max_length=4
     )
     zone_width_m: float = Field(gt=0, le=10000)
