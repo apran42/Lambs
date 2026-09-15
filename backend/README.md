@@ -32,7 +32,8 @@ TensorRT, CUDA, and OpenCV. Do not install it into a system Python or the existi
 
 The persistent worker owns video capture, JPEG encoding, and TensorRT inference.
 Copy `jetson_worker/cameras.example.json`, update the external-drive video paths,
-and start it with Jetson system Python 3.6:
+and use that same local file for both processes. This keeps enabled camera IDs in
+sync. Start the worker with Jetson system Python 3.6:
 
 ```bash
 cd ~/sheperd_runtime/shepherd_backend/backend

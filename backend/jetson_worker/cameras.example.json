@@ -5,6 +5,9 @@
       "name": "CAM 01",
       "source": "/media/lambs/BEEZAP BZ36/shepherd/videos/sample_data (1).mp4",
       "target_fps": 20,
+      "facility": "model-zone",
+      "location": "zone-a",
+      "roi_config_path": "../camera_configs/cam-01-roi.json",
       "loop": true,
       "enabled": true
     },
@@ -13,6 +16,9 @@
       "name": "CAM 02",
       "source": "/media/lambs/BEEZAP BZ36/shepherd/videos/sample_data (2).mp4",
       "target_fps": 20,
+      "facility": "model-zone",
+      "location": "zone-b",
+      "roi_config_path": "../camera_configs/cam-02-roi.json",
       "loop": true,
       "enabled": false
     }
