@@ -280,6 +280,51 @@ body {
   display: block;
 }
 
+.stream-waiting-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  color: #cbd5e1;
+  background: rgba(3, 7, 18, 0.72);
+  text-align: center;
+  font-size: 14px;
+}
+
+.runtime-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.runtime-banner span {
+  color: #cbd5e1;
+  overflow-wrap: anywhere;
+}
+
+.runtime-ready {
+  border: 1px solid rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.runtime-warning {
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+@media (max-width: 760px) {
+  .runtime-banner {
+    flex-direction: column;
+  }
+}
+
 /* 6. 전체 통계 요약 카드 */
 .summary-title {
   color: #9ca3af;

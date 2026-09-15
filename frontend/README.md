@@ -1,4 +1,19 @@
-# React + Vite
+# Shepherd-AI React client
+
+## Jetson API connection
+
+Copy `.env.jetson.example` to `.env.local`, replace `JETSON_IP`, and restart the
+Vite process. Vite reads these values only when it starts.
+
+```bash
+npm install
+npm run dev -- --host 0.0.0.0
+```
+
+The runtime banner distinguishes three states: FastAPI unavailable, FastAPI
+available while waiting for TensorRT worker packets, and live TensorRT streaming.
+
+## Vite development
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
