@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 .venv/
+.venv_export/
 .env
 backend/roi_config.json
 backend/camera_configs/*-roi.json
