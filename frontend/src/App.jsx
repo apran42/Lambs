@@ -28,7 +28,8 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
     let socket;
     let reconnectTimer;
     let disposed = false;
-    let newestMessage = 0;
+    let pendingPacket = null;
+    let rendering = false;
 
     const drawPacket = async (buffer) => {
       if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 4) {
@@ -42,13 +43,12 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
 
       const jsonBytes = new Uint8Array(buffer, 4, jsonLength);
       const nextMetadata = JSON.parse(new TextDecoder().decode(jsonBytes));
-      const messageId = ++newestMessage;
       setMetadata(nextMetadata);
       onMetrics(camera.id, { ...nextMetadata, connected: true });
 
       const imageBytes = new Uint8Array(buffer, 4 + jsonLength);
       const bitmap = await createImageBitmap(new Blob([imageBytes], { type: 'image/jpeg' }));
-      if (disposed || messageId !== newestMessage) {
+      if (disposed) {
         bitmap.close();
         return;
       }
@@ -109,12 +109,30 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
       });
     };
 
+    const renderLatestPacket = async () => {
+      if (rendering) return;
+      rendering = true;
+      try {
+        while (!disposed && pendingPacket) {
+          const packet = pendingPacket;
+          pendingPacket = null;
+          await drawPacket(packet);
+        }
+      } catch (error) {
+        console.error(`${camera.id} packet error:`, error);
+      } finally {
+        rendering = false;
+        if (!disposed && pendingPacket) renderLatestPacket();
+      }
+    };
+
     const connect = () => {
       socket = new WebSocket(`${WS_BASE}/${camera.id}`);
       socket.binaryType = 'arraybuffer';
       socket.onopen = () => setConnected(true);
       socket.onmessage = (event) => {
-        drawPacket(event.data).catch((error) => console.error(`${camera.id} packet error:`, error));
+        pendingPacket = event.data;
+        renderLatestPacket();
       };
       socket.onerror = () => socket.close();
       socket.onclose = () => {
@@ -127,7 +145,7 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
     connect();
     return () => {
       disposed = true;
-      newestMessage += 1;
+      pendingPacket = null;
       window.clearTimeout(reconnectTimer);
       socket?.close();
     };
