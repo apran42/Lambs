@@ -50,6 +50,7 @@ API with Python 3.8:
 ```bash
 cd ~/sheperd_runtime/shepherd_backend
 source ~/sheperd_runtime/backend_venv38/bin/activate
+pip install -r requirements-jetson-backend.txt
 export INFERENCE_BACKEND=jetson
 export JETSON_WORKER_URL=http://127.0.0.1:8766
 python -c "import main"
