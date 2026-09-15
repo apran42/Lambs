@@ -30,22 +30,38 @@ TensorRT worker. Install `requirements-jetson-backend.txt` only in the isolated
 TensorRT, CUDA, and OpenCV. Do not install it into a system Python or the existing
 `~/backend_venv`.
 
-Until the worker is implemented, start the copied backend explicitly in API-only
-mode:
+The persistent worker owns video capture, JPEG encoding, and TensorRT inference.
+Copy `jetson_worker/cameras.example.json`, update the external-drive video paths,
+and start it with Jetson system Python 3.6:
+
+```bash
+cd ~/sheperd_runtime/shepherd_backend/backend
+cp jetson_worker/cameras.example.json jetson_worker/cameras.local.json
+/usr/bin/python3 -m jetson_worker.server \
+  --engine "/media/lambs/BEEZAP BZ36/shepherd/engines/best_fp16.engine" \
+  --cameras jetson_worker/cameras.local.json \
+  --host 127.0.0.1 --port 8766
+```
+
+In another terminal, copy `.env.jetson-backend.example` to `.env` and start the
+API with Python 3.8:
 
 ```bash
 cd ~/sheperd_runtime/shepherd_backend
 source ~/sheperd_runtime/backend_venv38/bin/activate
-export INFERENCE_BACKEND=unavailable
+export INFERENCE_BACKEND=jetson
+export JETSON_WORKER_URL=http://127.0.0.1:8766
 python -c "import main"
 uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
-`GET /health` then returns `mode: api-only` and `inference.available: false`.
-Camera WebSockets close with code 1013, and ROI/calibration operations that need
-the camera runtime return HTTP 503 instead of crashing application startup. The
-development PC keeps `INFERENCE_BACKEND=ultralytics` and uses the same normalized
-detection contract (`box`, `confidence`, and optional `track_id`).
+Keep both processes at one worker each. `GET /health` reports
+`mode: jetson-worker-bridge`; `inference.available` changes to true after the
+first packet arrives. The API uses no OpenCV, TensorRT, PyCUDA, torch, or
+Ultralytics. It calculates ROI density and the five-minute forecast from the
+worker's normalized detections. The development PC keeps
+`INFERENCE_BACKEND=ultralytics` and the same detection contract (`box`,
+`confidence`, and optional `track_id`).
 
 Density uses the bottom-centre footpoint of each person box. Four normalized ROI
 corners are mapped by a homography to the configurable model plane. The backend

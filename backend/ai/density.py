@@ -6,10 +6,28 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 
 from config import settings
+from utils.geometry import build_homography, to_bird_eye
+
+
+def _polygon_area(points: np.ndarray) -> float:
+    x = points[:, 0]
+    y = points[:, 1]
+    return float(abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))) / 2.0)
+
+
+def _inside_convex_polygon(point: tuple[float, float], polygon: np.ndarray) -> bool:
+    next_points = np.roll(polygon, -1, axis=0)
+    edges = next_points - polygon
+    relative = np.asarray(point, dtype=np.float64) - polygon
+    cross = edges[:, 0] * relative[:, 1] - edges[:, 1] * relative[:, 0]
+    return bool(np.all(cross >= -1e-6) or np.all(cross <= 1e-6))
+
+
+def _transform_polygon(points: np.ndarray, matrix: np.ndarray) -> list[list[float]]:
+    return [list(to_bird_eye(float(x), float(y), matrix)) for x, y in points]
 
 
 @dataclass(frozen=True)
@@ -73,7 +91,7 @@ class ROIConfig:
         if any(coordinate < 0 or coordinate > 1 for point in self.roi_points_normalized for coordinate in point):
             raise ValueError("Normalized ROI coordinates must be between 0 and 1")
         polygon = np.asarray(self.roi_points_normalized, dtype=np.float32)
-        if abs(cv2.contourArea(polygon)) < 0.0001:
+        if _polygon_area(polygon) < 0.0001:
             raise ValueError("ROI polygon area is too small")
         if self.zone_width_m <= 0 or self.zone_height_m <= 0:
             raise ValueError("Zone dimensions must be positive")
@@ -207,7 +225,7 @@ class DensityAnalyzer:
             ],
             dtype=np.float32,
         )
-        homography = cv2.getPerspectiveTransform(roi_pixels, destination)
+        homography = build_homography(roi_pixels.tolist(), destination.tolist())
         if not np.isfinite(homography).all() or abs(np.linalg.det(homography)) < 1e-12:
             raise ValueError("ROI points cannot produce a valid homography")
         inverse_homography = np.linalg.inv(homography)
@@ -216,15 +234,12 @@ class DensityAnalyzer:
         for detection in detections:
             x1, _y1, x2, y2 = detection["box"]
             footpoint = (float((x1 + x2) / 2), float(y2))
-            inside = cv2.pointPolygonTest(roi_pixels, footpoint, False) >= 0
+            inside = _inside_convex_polygon(footpoint, roi_pixels)
             detection["footpoint"] = list(footpoint)
             detection["in_roi"] = bool(inside)
             if not inside:
                 continue
-            transformed = cv2.perspectiveTransform(
-                np.asarray([[footpoint]], dtype=np.float32), homography
-            )[0, 0]
-            point_m = (float(transformed[0]), float(transformed[1]))
+            point_m = to_bird_eye(footpoint[0], footpoint[1], homography)
             detection["bird_eye_m"] = list(point_m)
             points_m.append(point_m)
 
@@ -244,17 +259,15 @@ class DensityAnalyzer:
             row = index // config.grid_cols
             column = index % config.grid_cols
             metric_polygon = np.asarray(
-                [[
+                [
                     [column * cell_width, row * cell_height],
                     [(column + 1) * cell_width, row * cell_height],
                     [(column + 1) * cell_width, (row + 1) * cell_height],
                     [column * cell_width, (row + 1) * cell_height],
-                ]],
+                ],
                 dtype=np.float32,
             )
-            pixel_polygon = cv2.perspectiveTransform(
-                metric_polygon, inverse_homography
-            )[0]
+            pixel_polygon = _transform_polygon(metric_polygon, inverse_homography)
             grid.append(
                 {
                     "id": index + 1,
@@ -262,7 +275,7 @@ class DensityAnalyzer:
                     "area_m2": float(cell_area),
                     "density_people_per_m2": density,
                     "level": self._density_level(density, config),
-                    "polygon": pixel_polygon.tolist(),
+                    "polygon": pixel_polygon,
                 }
             )
 
@@ -278,17 +291,17 @@ class DensityAnalyzer:
             peak = self._sliding_window_peak(points_m, config)
             peak_x, peak_y = peak["origin_m"]
             peak_metric_polygon = np.asarray(
-                [[
+                [
                     [peak_x, peak_y],
                     [peak_x + peak["width_m"], peak_y],
                     [peak_x + peak["width_m"], peak_y + peak["height_m"]],
                     [peak_x, peak_y + peak["height_m"]],
-                ]],
+                ],
                 dtype=np.float32,
             )
-            peak["polygon"] = cv2.perspectiveTransform(
+            peak["polygon"] = _transform_polygon(
                 peak_metric_polygon, inverse_homography
-            )[0].tolist()
+            )
             applied_peak_density = float(peak["density_people_per_m2"])
             density_mode = "sliding-local-window"
         return {

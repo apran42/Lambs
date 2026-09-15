@@ -5,30 +5,16 @@ import contextlib
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 import cv2
 
 from config import settings
+from services.stream_types import FrameSnapshot, StreamPacket
 
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class FrameSnapshot:
-    frame_id: int
-    captured_at: str
-    frame: Any
-
-
-@dataclass(frozen=True)
-class StreamPacket:
-    frame_id: int
-    image_bytes: bytes
-    metadata: dict
 
 
 class StreamService:

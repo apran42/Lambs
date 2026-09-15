@@ -15,7 +15,7 @@ from ai.density import DensityAnalyzer
 from ai.forecast import CrowdForecaster
 from config import settings
 from services.camera_registry import CameraDefinition
-from services.stream_service import FrameSnapshot, StreamPacket
+from services.stream_types import FrameSnapshot, StreamPacket
 
 
 logger = logging.getLogger(__name__)

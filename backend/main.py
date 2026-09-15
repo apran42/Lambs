@@ -20,15 +20,20 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     definitions = load_camera_definitions()
-    detector = create_detector()
-    if detector.available:
-        from services.multi_camera_service import MultiCameraService
+    if settings.INFERENCE_BACKEND.strip().lower() == "jetson":
+        from services.jetson_camera_service import JetsonCameraService
 
-        service = MultiCameraService(definitions, detector, db_manager=db_manager)
+        service = JetsonCameraService(definitions, db_manager=db_manager)
     else:
-        from services.unavailable_camera_service import UnavailableCameraService
+        detector = create_detector()
+        if detector.available:
+            from services.multi_camera_service import MultiCameraService
 
-        service = UnavailableCameraService(definitions, detector)
+            service = MultiCameraService(definitions, detector, db_manager=db_manager)
+        else:
+            from services.unavailable_camera_service import UnavailableCameraService
+
+            service = UnavailableCameraService(definitions, detector)
     app.state.multi_camera_service = service
     app.state.default_camera_id = definitions[0].camera_id
     await service.start()
