@@ -23,6 +23,7 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
   const canvasRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [metadata, setMetadata] = useState(null);
+  const [renderFps, setRenderFps] = useState(0);
 
   useEffect(() => {
     let socket;
@@ -30,6 +31,7 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
     let disposed = false;
     let pendingPacket = null;
     let rendering = false;
+    const renderTimes = [];
 
     const drawPacket = async (buffer) => {
       if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 4) {
@@ -107,6 +109,18 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
         context.arc(left + width / 2, top + height, 4, 0, 2 * Math.PI);
         context.fill();
       });
+
+      const renderedAt = performance.now();
+      renderTimes.push(renderedAt);
+      while (renderTimes.length > 1 && renderTimes[0] < renderedAt - 2000) {
+        renderTimes.shift();
+      }
+      const renderSpan = renderTimes.at(-1) - renderTimes[0];
+      const clientRenderFps = renderSpan > 0
+        ? (renderTimes.length - 1) * 1000 / renderSpan
+        : 0;
+      setRenderFps(clientRenderFps);
+      onMetrics(camera.id, { client_render_fps: clientRenderFps });
     };
 
     const renderLatestPacket = async () => {
@@ -185,6 +199,7 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
       <div className="feed-metrics">
         <span>영상 {Number(metadata?.capture_fps || 0).toFixed(1)} FPS</span>
         <span>AI {Number(metadata?.analysis_fps || 0).toFixed(1)} FPS</span>
+        <span>브라우저 {renderFps.toFixed(1)} FPS</span>
         <span>고정 그리드 최대 {Number(metadata?.max_grid_density_people_per_m2 || 0).toFixed(2)} 명/㎡</span>
         <span>
           5분 예측 {metadata?.forecast_5m?.predicted_roi_count ?? '-'}명
