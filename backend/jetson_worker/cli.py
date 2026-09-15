@@ -20,6 +20,7 @@ def _arguments():
     source.add_argument("--video", help="Run frames from a video file")
     parser.add_argument("--confidence", type=float, default=0.35)
     parser.add_argument("--iou", type=float, default=0.45)
+    parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--max-frames", type=int, default=100)
     parser.add_argument("--output-image", help="Optional annotated image path")
     return parser.parse_args()
@@ -37,7 +38,7 @@ def _infer_frame(engine, image, confidence, iou):
     return detections, inference_ms
 
 
-def _image_result(args, engine):
+def _image_result(args, engine, warmup):
     image = cv2.imread(args.image)
     if image is None:
         raise RuntimeError("Could not read image: {}".format(args.image))
@@ -62,6 +63,7 @@ def _image_result(args, engine):
         "detections": detections,
         "inference_ms": inference_ms,
         "engine_input_shape": list(engine.input_shape),
+        "warmup": warmup,
     }
 
 
@@ -109,19 +111,26 @@ def _video_results(args, engine):
 def main():
     args = _arguments()
     with TensorRTEngine(args.engine) as engine:
+        timings = engine.warmup(args.warmup)
+        warmup = {
+            "iterations": len(timings),
+            "first_ms": timings[0] if timings else None,
+            "last_ms": timings[-1] if timings else None,
+            "mean_ms": sum(timings) / len(timings) if timings else None,
+        }
         if args.image:
             print(
                 json.dumps(
-                    _image_result(args, engine),
+                    _image_result(args, engine, warmup),
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
             )
             return
+        print(json.dumps({"status": "warmup", "data": warmup}), file=sys.stderr)
         for result in _video_results(args, engine):
             print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
 
 
 if __name__ == "__main__":
     main()
-

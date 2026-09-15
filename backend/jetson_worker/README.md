@@ -32,3 +32,7 @@ The JSON detections use the same contract as the development detector:
 {"box":[10.0,20.0,100.0,200.0],"confidence":0.91,"track_id":null}
 ```
 
+The CLI performs five warm-up inferences by default. The first warm-up includes
+CUDA context initialization, while the reported image `inference_ms` represents
+a subsequent steady-state inference. Use `--warmup=0` only when measuring cold
+startup deliberately.

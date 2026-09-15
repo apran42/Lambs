@@ -84,7 +84,7 @@ class TensorRTEngine(object):
             for index in self.output_indices
         ]
 
-        started = time.time()
+        started = time.perf_counter()
         self.cuda.copy_host_to_device(
             self.device_buffers[self.input_index],
             input_tensor,
@@ -94,8 +94,21 @@ class TensorRTEngine(object):
             raise RuntimeError("TensorRT execute_v2 returned false")
         for output, index in zip(outputs, self.output_indices):
             self.cuda.copy_device_to_host(output, self.device_buffers[index])
-        elapsed_ms = (time.time() - started) * 1000.0
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
         return outputs, elapsed_ms
+
+    def warmup(self, iterations=5):
+        """Run zero-filled inputs so CUDA initialization is not timed as inference."""
+
+        timings = []
+        input_tensor = np.zeros(
+            self.input_shape,
+            dtype=self.binding_dtypes[self.input_index],
+        )
+        for _index in range(max(0, int(iterations))):
+            _outputs, elapsed_ms = self.infer(input_tensor)
+            timings.append(elapsed_ms)
+        return timings
 
     def close(self):
         if getattr(self, "device_buffers", None):
@@ -108,4 +121,3 @@ class TensorRTEngine(object):
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
-
