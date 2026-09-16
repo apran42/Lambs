@@ -1,6 +1,8 @@
 # Python
 __pycache__/
 .venv/
+.venv_export/
+.venv-training/
 .env
 backend/roi_config.json
 backend/camera_configs/*-roi.json
@@ -8,6 +10,7 @@ backend/camera_configs/*-roi.json
 *.py[cod]
 
 *.pt
+*.onnx
 *.engine
 shepherd-ai-phase1.zip
 
@@ -21,6 +24,15 @@ frontend/.pnpm-debug.log
 
 # SampleData
 /data/*.mp4
+/data/*.avi
+/data/*.mov
+/data/*.mkv
+/data/training/
+/runs/
+/tmp/
+
+# Local operator notes
+/영상 실행 목록.txt
 
 # batch 파일
 *.bat
