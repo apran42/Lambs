@@ -4,10 +4,10 @@ CCTV 실시간 혼잡도 분석 및 예측 시스템
 CCTV 영상을 활용한 실시간 인파 밀집도 분석 및 시계열 예측 졸업작품입니다.
 
 ## 🛠 기술 스택
-- **AI**: YOLOv8
-- **Backend**: FastAPI, InfluxDB
-- **Frontend**: React, Konva.js
-- **Hardware**: Jetson Nano (Target)
+- **인공지능**: YOLOv8
+- **백엔드**: FastAPI, InfluxDB
+- **프론트엔드**: React, Konva.js
+- **하드웨어**: Jetson Nano(배포 대상)
 
 ## 👥 팀원 역할
 - **프론트엔드**: 실시간 대시보드 및 Konva 가시화
