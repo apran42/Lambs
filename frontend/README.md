@@ -1,16 +1,27 @@
-# React + Vite
+# Lambs 프론트엔드
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React와 Vite로 구성한 실시간 혼잡도 대시보드입니다.
 
-Currently, two official plugins are available:
+## 개발 서버 실행
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Node.js와 npm을 설치한 뒤 `frontend` 폴더에서 실행합니다.
 
-## React Compiler
+```bash
+npm install
+npm run dev
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+터미널에 표시된 주소(기본값 `http://localhost:5173`)를 브라우저에서 엽니다.
+백엔드 주소를 환경변수로 변경했다면 Vite 개발 서버를 다시 시작해야 합니다.
 
-## Expanding the ESLint configuration
+## 코드 검사와 빌드
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+npm run lint
+npm run build
+```
+
+- `npm run lint`: ESLint 규칙 검사
+- `npm run build`: 배포용 정적 파일 생성
+
+Vite와 React 설정을 변경할 때는 각 도구의 공식 문서를 참고하세요.
