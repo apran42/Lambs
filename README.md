@@ -3,9 +3,6 @@ CCTV 실시간 혼잡도 분석 및 예측 시스템
 
 CCTV 영상을 활용한 실시간 인파 밀집도 분석 및 시계열 예측 졸업작품입니다.
 
-학습 영상 프레임 추출, 인원수·바운딩박스 통합 검수, YOLO 데이터 생성 방법은
-[`docs/training-data-review-guide.md`](docs/training-data-review-guide.md)를 참고하세요.
-
 ## 🛠 기술 스택
 - **인공지능**: YOLOv8
 - **백엔드**: FastAPI, InfluxDB
