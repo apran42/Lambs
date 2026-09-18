@@ -51,7 +51,7 @@ lambs/
 └── README.md
 ```
 ## 백엔드
-### Python (3.10+)
+### Python 3.9 이상
 ```bash
 cd backend
 pip install -r requirements.txt
@@ -59,7 +59,7 @@ pip install -r requirements.txt
 ### 서버 시작
 ```bash
 cd backend
-uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
+uvicorn main:app --reload
 ```
 
 ## 프론트엔드
@@ -68,8 +68,3 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
 cd frontend
 npm run dev
 ```
-
-현재 통합본은 640x480/30 FPS 단일 카메라 로컬 영상 파이프라인을 기본으로
-하며, 카메라별 `StreamService`를 추가할 수 있도록 식별자와 영상 처리를
-분리했습니다. 상세한 확장 및 밀도/예측 계획은
-[`docs/implementation-roadmap.md`](docs/implementation-roadmap.md)를 참고하세요.
