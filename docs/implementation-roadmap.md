@@ -1,78 +1,82 @@
-# Shepherd-AI implementation roadmap
+# Shepherd-AI 구현 로드맵
 
-## Confirmed requirements
+## 확정 요구사항
 
-- Development sources: `sample_data (10).mp4` and `sample_data (11).mp4`
-  (both are 1280 x 720 at 30 FPS and leave more local headroom for two streams)
-- Target capture: fixed USB webcam (exact model deferred)
-- Target frame format: 640 x 480, at least 20 FPS per displayed stream
-- Camera scale: four desired; demonstrate an extensible design and validate at least two
-- Test scene: a configurable model zone on foam board with person figures
-- Prediction horizon: five minutes
-- Jetson target: Jetson Nano 4 GB; JetPack/L4T/CUDA/TensorRT details deferred
-- Deployment split: decide after measuring Jetson inference, API, encoding, and database load
+- 개발용 영상: `sample_data (10).mp4`, `sample_data (11).mp4`
+  - 두 영상 모두 1280 x 720, 30 FPS이며 로컬에서 2개 스트림을 실행할 여유가 있음
+- 최종 입력 장치: 고정형 USB 웹캠(정확한 모델은 추후 확정)
+- 목표 화면 형식: 640 x 480, 표시 스트림당 최소 20 FPS
+- 카메라 수: 최종 목표 4대, 확장 가능한 구조를 제시하고 최소 2대 검증
+- 시험 장면: 우드락 위 사람 모형을 사용하는 크기 조절 가능한 모형 구역
+- 예측 범위: 5분 뒤
+- 배포 장치: Jetson Nano 4GB
+- JetPack/L4T/CUDA/TensorRT 상세 버전: 추후 확정
+- 배포 구조: Jetson의 추론·API·인코딩·DB 부하를 측정한 뒤 일체형 또는 분리형 결정
 
-## Density phase (initial implementation complete)
+## 밀도 계산 단계 — 초기 구현 완료
 
-Each camera will own a configuration containing:
+각 카메라는 다음 설정을 가집니다.
 
-- camera ID and source
-- valid image ROI
-- image-to-model-plane homography
-- model-zone area in square metres (a configurable reference area)
-- calibration version
-- density thresholds
+- 카메라 ID와 입력 소스
+- 유효 영상 ROI
+- 영상 좌표를 모델 평면으로 변환하는 호모그래피
+- 제곱미터 단위 모델 구역 면적(사용자가 설정하는 기준 면적)
+- 캘리브레이션 버전
+- 밀도 단계 임계값
 
-The current calculation uses each detection's bottom-centre footpoint. The four
-ROI corners are mapped to the virtual model plane by a homography. It reports:
+현재 계산은 사람 바운딩박스의 아래쪽 중앙점(발 위치)을 사용합니다. ROI 꼭짓점
+4개를 호모그래피로 가상 모델 평면에 투영한 뒤 다음 값을 제공합니다.
 
-- whole ROI density: `ROI people / (zone width x zone height)`
-- fixed cell density: `people in cell / cell area`
-- local peak density: the largest `people in movable window / window area`
+- 전체 ROI 밀도: `ROI 안 인원수 / (구역 가로 x 세로)`
+- 고정 셀 밀도: `셀 안 인원수 / 셀 면적`
+- 국소 최대 밀도: `이동 영역 안 인원수 / 이동 영역 면적` 중 최댓값
 
-The local-peak algorithm remains implemented, but it is currently disabled by
-configuration. Safety status and five-minute forecasting use the densest fixed
-grid. It can be re-enabled later with `ENABLE_LOCAL_PEAK_DENSITY=true` after the
-team agrees on how a movable area should be presented and validated.
+국소 최대 밀도 알고리즘은 코드에 남아 있지만 현재 설정상 비활성화되어 있습니다.
+안전 단계와 5분 예측은 가장 밀도가 높은 고정 그리드 셀을 사용합니다. 이동 영역의
+표현 방법과 검증 기준에 팀이 합의하면 `ENABLE_LOCAL_PEAK_DENSITY=true`로 다시
+활성화할 수 있습니다.
 
-The planned outdoor density levels are:
+프로젝트에서 사용하는 실외 밀도 단계는 다음과 같습니다.
 
-- Relaxed: density <= 2.0 people/m2
-- Caution: 2.0 < density < 5.0 people/m2
-- Danger: density >= 5.0 people/m2
+- 여유: 밀도 <= 2.0명/㎡
+- 주의: 2.0명/㎡ < 밀도 < 5.0명/㎡
+- 위험: 밀도 >= 5.0명/㎡
 
-These values follow the project interpretation of the Ministry of the Interior
-and Safety [crowd-safety guideline](https://www.mois.go.kr/frt/bbs/type001/commonSelectBoardArticle.do?bbsId=BBSMSTR_000000000015&nttId=121405).
-The UI and API must display that this is a model-zone estimate, not a certified
-real-world safety measurement.
+행정안전부의 [다중운집인파사고 안전관리 가이드라인](https://www.mois.go.kr/frt/bbs/type001/commonSelectBoardArticle.do?bbsId=BBSMSTR_000000000015&nttId=121405)을
+프로젝트 목적에 맞게 해석한 값입니다. UI와 API에는 이 값이 공인된 현실 공간
+안전 측정치가 아니라 모형 구역을 기준으로 한 추정치임을 표시해야 합니다.
 
-## Prediction phase (online baseline implemented)
+## 예측 단계 — 온라인 기준선 구현 완료
 
-Collect trustworthy time-series observations before training a prediction model.
-At minimum, store camera/zone IDs, UTC timestamp, ROI count, density, density
-level, inference latency, capture FPS, inference FPS, and skipped-frame count.
-Use a time-ordered split and compare a simple seasonal or moving-average baseline
-before adopting a more complex model. The output horizon is five minutes.
+예측 모델을 학습하기 전에 신뢰할 수 있는 시계열 관측값을 수집해야 합니다. 최소
+저장 항목은 카메라/구역 ID, UTC 시각, ROI 인원수, 밀도, 밀도 단계, 추론 지연,
+캡처 FPS, 추론 FPS, 건너뛴 프레임 수입니다. 시간 순서대로 학습·검증 데이터를
+나누고, 복잡한 모델을 적용하기 전에 계절성 또는 이동 평균 기준선과 비교합니다.
+예측 시점은 5분 뒤입니다.
 
-The current runtime provides a conservative baseline: persistence during the
-first minute, followed by a damped linear trend over five-second median buckets.
-It exposes readiness and confidence, but its accuracy cannot be claimed until
-representative ground-truth time-series data is collected and backtested.
+현재 런타임은 시작 후 첫 1분 동안 현재값 유지 기준선을 사용하고, 이후 5초 단위
+중앙값 버킷에 감쇠 선형 추세를 적용합니다. 준비 상태와 신뢰도를 함께 제공하지만,
+대표성 있는 시계열 정답 데이터를 모아 백테스트하기 전에는 정확도를 주장할 수
+없습니다.
 
-## Multi-camera acceptance
+## 다중 카메라 완료 기준
 
-Use one capture runtime per camera and one shared batch inference scheduler.
-Before claiming production two-camera support, measure two simultaneous 640 x
-480, 20 FPS inputs for at least 30 minutes and report capture FPS, displayed FPS,
-inference FPS, latency percentiles, skipped frames, memory, CPU/GPU load, and
-temperature. "No frame drop" must be defined separately for capture/display and
-AI inference because a latest-frame real-time pipeline intentionally skips stale
-frames when inference is slower than capture.
+카메라마다 하나의 캡처 런타임을 사용하고 하나의 배치 추론 스케줄러를 공유합니다.
+2대 지원 완료를 선언하기 전에 640 x 480, 20 FPS 입력 2개를 최소 30분 동시에
+실행하고 다음 항목을 기록해야 합니다.
 
-## Deferred decisions
+- 캡처 FPS, 화면 표시 FPS, 추론 FPS
+- 지연 시간 백분위수와 건너뛴 프레임 수
+- 메모리, CPU/GPU 사용량과 온도
 
-- Exact JetPack, L4T, CUDA, TensorRT, Python, and Ultralytics versions
-- TensorRT FP16 versus INT8 engine
-- USB camera index, codec, and reconnect behaviour
-- All-in-one Jetson deployment versus edge inference plus central API/database
-- Ground-truth annotation format and accuracy targets
+최신 프레임 우선 실시간 파이프라인은 추론이 캡처보다 느릴 때 오래된 프레임을
+의도적으로 건너뜁니다. 따라서 “프레임 드롭 없음”은 캡처·표시와 AI 추론을
+구분해 정의해야 합니다.
+
+## 추후 결정할 항목
+
+- JetPack, L4T, CUDA, TensorRT, Python, Ultralytics 정확한 버전
+- TensorRT FP16 또는 INT8 엔진 선택
+- USB 카메라 인덱스, 코덱, 재연결 동작
+- Jetson 일체형 배포 또는 엣지 추론과 중앙 API/DB 분리
+- 정답 라벨 형식과 목표 정확도
