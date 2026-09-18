@@ -7,6 +7,9 @@ backend/roi_config.json
 backend/camera_configs/*-roi.json
 !backend/camera_configs/*.example.json
 backend/jetson_worker/cameras.local.json
+backend/data/*.sqlite3
+backend/data/*.sqlite3-shm
+backend/data/*.sqlite3-wal
 *.py[cod]
 
 *.pt

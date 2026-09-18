@@ -189,6 +189,9 @@ class JetsonCameraService:
             location=runtime.definition.location,
             camera_id=runtime.definition.camera_id,
             count=metadata.get("count", 0),
+            timestamp=(
+                metadata.get("analysis_captured_at") or metadata.get("captured_at")
+            ),
             roi_count=metadata.get("roi_count"),
             density=metadata.get("density_people_per_m2"),
             density_level=metadata.get("risk_level"),
