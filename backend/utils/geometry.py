@@ -1,4 +1,5 @@
-import cv2
+from __future__ import annotations
+
 import numpy as np
 
 
@@ -7,17 +8,29 @@ def build_homography(src_points: list, dst_points: list):
     dst = np.asarray(dst_points, dtype=np.float32)
     if src.shape != (4, 2) or dst.shape != (4, 2):
         raise ValueError("src_points and dst_points must each contain four [x, y] points")
-    matrix, _ = cv2.findHomography(src, dst, cv2.RANSAC)
-    if matrix is None:
-        raise ValueError("Could not calculate a homography matrix")
-    return matrix
+    rows = []
+    values = []
+    for (x, y), (u, v) in zip(src, dst):
+        rows.append([x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y])
+        values.append(u)
+        rows.append([0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y])
+        values.append(v)
+    try:
+        coefficients = np.linalg.solve(
+            np.asarray(rows, dtype=np.float64),
+            np.asarray(values, dtype=np.float64),
+        )
+    except np.linalg.LinAlgError as exc:
+        raise ValueError("Could not calculate a homography matrix") from exc
+    return np.append(coefficients, 1.0).reshape(3, 3)
 
 
 def to_bird_eye(pixel_x: float, pixel_y: float, matrix: np.ndarray):
-    point = np.array([[[pixel_x, pixel_y]]], dtype=np.float32)
-    result = cv2.perspectiveTransform(point, matrix)
-    x, y = result[0][0]
-    return float(x), float(y)
+    point = np.asarray([pixel_x, pixel_y, 1.0], dtype=np.float64)
+    result = np.asarray(matrix, dtype=np.float64).dot(point)
+    if abs(result[2]) < 1e-12:
+        raise ValueError("Point cannot be transformed by this homography")
+    return float(result[0] / result[2]), float(result[1] / result[2])
 
 
 def calculate_positions(results, homography: np.ndarray | None = None) -> list[dict]:

@@ -1,5 +1,11 @@
+from __future__ import annotations
+
+from typing import List, Tuple
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+
+from services.unavailable_camera_service import InferenceUnavailableError
 
 
 router = APIRouter(prefix="/api/roi", tags=["roi-density"])
@@ -7,7 +13,7 @@ router = APIRouter(prefix="/api/roi", tags=["roi-density"])
 
 class ROIConfigUpdate(BaseModel):
     camera_id: str = Field(min_length=1, max_length=100)
-    roi_points_normalized: list[tuple[float, float]] = Field(
+    roi_points_normalized: List[Tuple[float, float]] = Field(
         min_length=4, max_length=4
     )
     zone_width_m: float = Field(gt=0, le=10000)
@@ -24,8 +30,11 @@ class ROIConfigUpdate(BaseModel):
 @router.get("")
 async def get_roi_config(request: Request):
     camera_id = request.app.state.default_camera_id
-    analyzer = request.app.state.multi_camera_service.get_density_analyzer(camera_id)
-    return {"data": analyzer.get_config()}
+    try:
+        analyzer = request.app.state.multi_camera_service.get_density_analyzer(camera_id)
+        return {"data": analyzer.get_config()}
+    except InferenceUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.put("")
@@ -40,6 +49,8 @@ async def get_camera_roi_config(camera_id: str, request: Request):
         return {"data": analyzer.get_config()}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown camera id") from exc
+    except InferenceUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.put("/{camera_id}")
@@ -61,5 +72,7 @@ async def update_camera_roi_config(
         return {"status": "ok", "data": data}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown camera id") from exc
+    except InferenceUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

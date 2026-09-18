@@ -1,51 +1,81 @@
-import contextlib
+"""Inference contracts and dependency-safe detector construction.
 
-import torch
-from ultralytics import YOLO
+This module must remain importable without torch, Ultralytics, or TensorRT. Heavy
+runtime implementations are imported only after a backend has been selected.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Protocol
 
 from config import settings
 
 
-class PersonDetector:
-    """Local Ultralytics implementation; a TensorRT implementation can replace it."""
+# Unlike annotations postponed by ``from __future__ import annotations``, a type
+# alias is evaluated as soon as the module is imported.  ``dict[str, Any]`` is
+# therefore not usable on the Jetson API runtime's Python 3.8.
+Detection = Dict[str, Any]
 
-    def __init__(self) -> None:
-        requested_device = settings.YOLO_DEVICE.strip().lower()
-        use_cpu = requested_device == "cpu" or (
-            not requested_device and not torch.cuda.is_available()
+
+class Detector(Protocol):
+    backend_name: str
+    available: bool
+    unavailable_reason: str | None
+
+    def track_objects(self, frame: Any) -> list[Detection]:
+        """Return normalized detections for one frame."""
+
+    def detect_batch(self, frames: list[Any]) -> list[list[Detection]]:
+        """Return one normalized detection list per input frame."""
+
+    def health(self) -> dict[str, Any]:
+        """Describe the selected inference runtime."""
+
+
+class UnavailableDetector:
+    """No-op detector used while the external Jetson worker is unavailable."""
+
+    backend_name = "unavailable"
+    available = False
+
+    def __init__(self, reason: str | None = None) -> None:
+        self.unavailable_reason = reason or settings.INFERENCE_UNAVAILABLE_REASON
+
+    def track_objects(self, _frame: Any) -> list[Detection]:
+        return []
+
+    def detect_batch(self, frames: list[Any]) -> list[list[Detection]]:
+        return [[] for _frame in frames]
+
+    def health(self) -> dict[str, Any]:
+        return {
+            "backend": self.backend_name,
+            "available": self.available,
+            "reason": self.unavailable_reason,
+        }
+
+
+def create_detector(backend_name: str | None = None) -> Detector:
+    """Build the selected detector without importing unused AI dependencies."""
+
+    selected = (backend_name or settings.INFERENCE_BACKEND).strip().lower()
+    if selected == "ultralytics":
+        from ai.ultralytics_detector import UltralyticsDetector
+
+        return UltralyticsDetector()
+    if selected in {"unavailable", "disabled", "none"}:
+        return UnavailableDetector()
+    if selected == "jetson":
+        return UnavailableDetector(
+            "Jetson TensorRT inference worker is not connected yet."
         )
-        if use_cpu:
-            torch.set_num_threads(max(1, settings.CPU_INFERENCE_THREADS))
-            # PyTorch only permits changing this before inter-op work starts.
-            with contextlib.suppress(RuntimeError):
-                torch.set_num_interop_threads(max(1, settings.CPU_INTEROP_THREADS))
-        self.model = YOLO(settings.YOLO_MODEL_PATH)
+    raise ValueError(
+        "Unsupported INFERENCE_BACKEND. Expected ultralytics, jetson, or unavailable: "
+        f"{selected}"
+    )
 
-    def track_objects(self, frame):
-        options = {
-            "source": frame,
-            "persist": True,
-            "verbose": False,
-            "classes": [0],
-            "conf": settings.YOLO_CONFIDENCE,
-            "iou": settings.YOLO_IOU,
-            "imgsz": settings.YOLO_IMAGE_SIZE,
-            "tracker": settings.YOLO_TRACKER,
-        }
-        if settings.YOLO_DEVICE:
-            options["device"] = settings.YOLO_DEVICE
-        return self.model.track(**options)
 
-    def detect_batch(self, frames):
-        """Run one shared model over frames from multiple cameras."""
-        options = {
-            "source": frames,
-            "verbose": False,
-            "classes": [0],
-            "conf": settings.YOLO_CONFIDENCE,
-            "iou": settings.YOLO_IOU,
-            "imgsz": settings.YOLO_IMAGE_SIZE,
-        }
-        if settings.YOLO_DEVICE:
-            options["device"] = settings.YOLO_DEVICE
-        return self.model.predict(**options)
+def PersonDetector() -> Detector:
+    """Backward-compatible factory for older imports."""
+
+    return create_detector()

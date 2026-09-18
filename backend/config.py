@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +44,21 @@ def _env_video_source(name: str, default: Path) -> str:
 
 @dataclass(frozen=True)
 class Settings:
+    INFERENCE_BACKEND: str = os.getenv("INFERENCE_BACKEND", "ultralytics")
+    INFERENCE_UNAVAILABLE_REASON: str = os.getenv(
+        "INFERENCE_UNAVAILABLE_REASON",
+        "AI inference runtime is not connected.",
+    )
+    JETSON_WORKER_URL: str = os.getenv(
+        "JETSON_WORKER_URL", "http://127.0.0.1:8766"
+    ).rstrip("/")
+    JETSON_WORKER_POLL_TIMEOUT_SECONDS: float = _env_float(
+        "JETSON_WORKER_POLL_TIMEOUT_SECONDS", 2.0
+    )
+    JETSON_WORKER_REQUEST_TIMEOUT_SECONDS: float = _env_float(
+        "JETSON_WORKER_REQUEST_TIMEOUT_SECONDS", 4.0
+    )
+
     INFLUXDB_URL: str = os.getenv("INFLUXDB_URL", "http://localhost:8086")
     INFLUXDB_TOKEN: str = os.getenv("INFLUXDB_TOKEN", "")
     INFLUXDB_ORG: str = os.getenv("INFLUXDB_ORG", "Lambs")

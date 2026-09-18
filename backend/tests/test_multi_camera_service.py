@@ -30,7 +30,10 @@ class FakeBatchDetector:
     def detect_batch(self, frames):
         self.calls += 1
         self.batch_sizes.append(len(frames))
-        return frames
+        return [[] for _frame in frames]
+
+    def health(self):
+        return {"backend": "fake", "available": True, "reason": None}
 
 
 def test_two_cameras_stream_while_sharing_one_detector():
@@ -69,6 +72,7 @@ def test_two_cameras_stream_while_sharing_one_detector():
                 assert first.metadata["target_stream_fps"] == 20.0
                 assert second.metadata["target_stream_fps"] == 20.0
                 assert detector.calls > 0
+                assert service.health()["inference"]["backend"] == "fake"
                 assert set(service.camera_ids) == {"cam-01", "cam-02"}
                 assert len(service.runtimes) == 2
             finally:

@@ -19,16 +19,19 @@ const LEVEL_STATUS = {
   Danger: 'cctv-status-danger',
 };
 
-function CameraFeed({ camera, onMetrics }) {
+function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
   const canvasRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [metadata, setMetadata] = useState(null);
+  const [renderFps, setRenderFps] = useState(0);
 
   useEffect(() => {
     let socket;
     let reconnectTimer;
     let disposed = false;
-    let newestMessage = 0;
+    let pendingPacket = null;
+    let rendering = false;
+    const renderTimes = [];
 
     const drawPacket = async (buffer) => {
       if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 4) {
@@ -42,13 +45,12 @@ function CameraFeed({ camera, onMetrics }) {
 
       const jsonBytes = new Uint8Array(buffer, 4, jsonLength);
       const nextMetadata = JSON.parse(new TextDecoder().decode(jsonBytes));
-      const messageId = ++newestMessage;
       setMetadata(nextMetadata);
       onMetrics(camera.id, { ...nextMetadata, connected: true });
 
       const imageBytes = new Uint8Array(buffer, 4 + jsonLength);
       const bitmap = await createImageBitmap(new Blob([imageBytes], { type: 'image/jpeg' }));
-      if (disposed || messageId !== newestMessage) {
+      if (disposed) {
         bitmap.close();
         return;
       }
@@ -107,6 +109,35 @@ function CameraFeed({ camera, onMetrics }) {
         context.arc(left + width / 2, top + height, 4, 0, 2 * Math.PI);
         context.fill();
       });
+
+      const renderedAt = performance.now();
+      renderTimes.push(renderedAt);
+      while (renderTimes.length > 1 && renderTimes[0] < renderedAt - 2000) {
+        renderTimes.shift();
+      }
+      const renderSpan = renderTimes.at(-1) - renderTimes[0];
+      const clientRenderFps = renderSpan > 0
+        ? (renderTimes.length - 1) * 1000 / renderSpan
+        : 0;
+      setRenderFps(clientRenderFps);
+      onMetrics(camera.id, { client_render_fps: clientRenderFps });
+    };
+
+    const renderLatestPacket = async () => {
+      if (rendering) return;
+      rendering = true;
+      try {
+        while (!disposed && pendingPacket) {
+          const packet = pendingPacket;
+          pendingPacket = null;
+          await drawPacket(packet);
+        }
+      } catch (error) {
+        console.error(`${camera.id} packet error:`, error);
+      } finally {
+        rendering = false;
+        if (!disposed && pendingPacket) renderLatestPacket();
+      }
     };
 
     const connect = () => {
@@ -114,7 +145,8 @@ function CameraFeed({ camera, onMetrics }) {
       socket.binaryType = 'arraybuffer';
       socket.onopen = () => setConnected(true);
       socket.onmessage = (event) => {
-        drawPacket(event.data).catch((error) => console.error(`${camera.id} packet error:`, error));
+        pendingPacket = event.data;
+        renderLatestPacket();
       };
       socket.onerror = () => socket.close();
       socket.onclose = () => {
@@ -127,7 +159,7 @@ function CameraFeed({ camera, onMetrics }) {
     connect();
     return () => {
       disposed = true;
-      newestMessage += 1;
+      pendingPacket = null;
       window.clearTimeout(reconnectTimer);
       socket?.close();
     };
@@ -147,6 +179,8 @@ function CameraFeed({ camera, onMetrics }) {
   }, [connected]);
 
   const level = metadata?.risk_level || 'Unavailable';
+  const waitingMessage = workerCamera?.last_error
+    || (!inferenceAvailable ? 'TensorRT Worker 패킷 대기 중...' : '영상 스트림 연결 대기 중...');
   return (
     <div className="card camera-feed-card">
       <div className="cctv-header">
@@ -160,10 +194,12 @@ function CameraFeed({ camera, onMetrics }) {
       </div>
       <div className="canvas-wrapper">
         <canvas ref={canvasRef} width={640} height={480} className="canvas-element" />
+        {!connected && <div className="stream-waiting-message">{waitingMessage}</div>}
       </div>
       <div className="feed-metrics">
         <span>영상 {Number(metadata?.capture_fps || 0).toFixed(1)} FPS</span>
         <span>AI {Number(metadata?.analysis_fps || 0).toFixed(1)} FPS</span>
+        <span>브라우저 {renderFps.toFixed(1)} FPS</span>
         <span>고정 그리드 최대 {Number(metadata?.max_grid_density_people_per_m2 || 0).toFixed(2)} 명/㎡</span>
         <span>
           5분 예측 {metadata?.forecast_5m?.predicted_roi_count ?? '-'}명
@@ -179,6 +215,8 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [cameraMetrics, setCameraMetrics] = useState({});
   const [cameras, setCameras] = useState(DEFAULT_CAMERAS);
+  const [serverHealth, setServerHealth] = useState(null);
+  const [serverError, setServerError] = useState(null);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -186,20 +224,32 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/cameras`)
-      .then((response) => {
-        if (!response.ok) throw new Error(`Camera API returned ${response.status}`);
-        return response.json();
-      })
-      .then((payload) => {
+    let disposed = false;
+    const loadHealth = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/health`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        if (disposed) return;
+        setServerHealth(payload);
+        setServerError(null);
         if (Array.isArray(payload.cameras) && payload.cameras.length) {
           setCameras(payload.cameras.map((camera) => ({
             id: camera.camera_id,
             name: camera.name || camera.camera_id,
           })));
         }
-      })
-      .catch((error) => console.warn('카메라 목록을 불러오지 못했습니다:', error));
+      } catch (error) {
+        if (disposed) return;
+        setServerError(error instanceof Error ? error.message : String(error));
+      }
+    };
+    loadHealth();
+    const timer = window.setInterval(loadHealth, 2000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   const updateMetrics = useCallback((cameraId, next) => {
@@ -210,6 +260,8 @@ export default function App() {
   }, []);
 
   const connectedCount = cameras.filter((camera) => cameraMetrics[camera.id]?.connected).length;
+  const inferenceAvailable = Boolean(serverHealth?.inference?.available);
+  const apiConnected = Boolean(serverHealth) && !serverError;
 
   return (
     <div className="app-container">
@@ -232,10 +284,31 @@ export default function App() {
         </div>
       </header>
 
+      <div className={`runtime-banner ${apiConnected && inferenceAvailable ? 'runtime-ready' : 'runtime-warning'}`}>
+        <strong>
+          {!apiConnected
+            ? 'FastAPI 연결 실패'
+            : inferenceAvailable
+              ? 'Jetson TensorRT 연결됨'
+              : 'FastAPI 연결됨 · TensorRT Worker 대기 중'}
+        </strong>
+        <span>
+          {serverError
+            ? `${API_BASE} · ${serverError}`
+            : serverHealth?.inference?.reason || `API ${API_BASE}`}
+        </span>
+      </div>
+
       <div className="multi-camera-layout">
         <div className="camera-grid">
           {cameras.map((camera) => (
-            <CameraFeed key={camera.id} camera={camera} onMetrics={updateMetrics} />
+            <CameraFeed
+              key={camera.id}
+              camera={camera}
+              onMetrics={updateMetrics}
+              inferenceAvailable={inferenceAvailable}
+              workerCamera={serverHealth?.cameras?.find((item) => item.camera_id === camera.id)}
+            />
           ))}
         </div>
 
