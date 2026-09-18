@@ -3,6 +3,9 @@ CCTV 실시간 혼잡도 분석 및 예측 시스템
 
 CCTV 영상을 활용한 실시간 인파 밀집도 분석 및 시계열 예측 졸업작품입니다.
 
+학습 영상 프레임 추출, 인원수·바운딩박스 통합 검수, YOLO 데이터 생성 방법은
+[`docs/training-data-review-guide.md`](docs/training-data-review-guide.md)를 참고하세요.
+
 ## 🛠 기술 스택
 - **인공지능**: YOLOv8
 - **백엔드**: FastAPI, InfluxDB
@@ -51,7 +54,7 @@ lambs/
 └── README.md
 ```
 ## 백엔드
-### Python 3.9 이상
+### Python (3.10+)
 ```bash
 cd backend
 pip install -r requirements.txt
@@ -59,7 +62,7 @@ pip install -r requirements.txt
 ### 서버 시작
 ```bash
 cd backend
-uvicorn main:app --reload
+uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
 ## 프론트엔드
@@ -68,3 +71,8 @@ uvicorn main:app --reload
 cd frontend
 npm run dev
 ```
+
+현재 통합본은 640x480/30 FPS 단일 카메라 로컬 영상 파이프라인을 기본으로
+하며, 카메라별 `StreamService`를 추가할 수 있도록 식별자와 영상 처리를
+분리했습니다. 상세한 확장 및 밀도/예측 계획은
+[`docs/implementation-roadmap.md`](docs/implementation-roadmap.md)를 참고하세요.
