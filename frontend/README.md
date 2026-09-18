@@ -1,31 +1,44 @@
-# Shepherd-AI React client
+# Shepherd-AI 프론트엔드
 
-## Jetson API connection
+React와 Vite로 구성한 실시간 혼잡도 대시보드입니다.
 
-Copy `.env.jetson.example` to `.env.local`, replace `JETSON_IP`, and restart the
-Vite process. Vite reads these values only when it starts.
+## Jetson API 연결
+
+`.env.jetson.example`을 `.env.local`로 복사하고 `JETSON_IP`를 실제 Jetson IP로
+바꿉니다. Vite는 시작할 때만 환경변수를 읽으므로 값을 바꾼 뒤 개발 서버를 다시
+시작해야 합니다.
 
 ```bash
+cp .env.jetson.example .env.local
 npm install
 npm run dev -- --host 0.0.0.0
 ```
 
-The runtime banner distinguishes three states: FastAPI unavailable, FastAPI
-available while waiting for TensorRT worker packets, and live TensorRT streaming.
+Windows에서는 파일 탐색기 또는 다음 명령으로 복사할 수 있습니다.
 
-## Vite development
+```powershell
+Copy-Item .env.jetson.example .env.local
+```
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+화면 상단의 실행 상태는 다음 세 가지를 구분합니다.
 
-Currently, two official plugins are available:
+- FastAPI에 연결할 수 없음
+- FastAPI는 실행 중이지만 TensorRT Worker 패킷 대기 중
+- TensorRT 실시간 스트리밍 중
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+연결되지 않으면 Jetson에서 다음 주소를 먼저 확인합니다.
 
-## React Compiler
+```text
+http://JETSON_IP:8001/health
+http://JETSON_IP:8001/docs
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 코드 검사와 빌드
 
-## Expanding the ESLint configuration
+```bash
+npm run lint
+npm run build
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- `npm run lint`: ESLint 규칙 검사
+- `npm run build`: 배포용 정적 파일 생성
