@@ -33,7 +33,10 @@ TensorRT, CUDA, and OpenCV. Do not install it into a system Python or the existi
 The persistent worker owns video capture, JPEG encoding, and TensorRT inference.
 Copy `jetson_worker/cameras.example.json`, update the external-drive video paths,
 and use that same local file for both processes. This keeps enabled camera IDs in
-sync. Start the worker with Jetson system Python 3.6:
+sync. Before starting either process, follow the external-drive preflight and
+disconnect-recovery procedure in
+[`jetson_worker/README.md`](jetson_worker/README.md#external-drive-preflight).
+Start the worker with Jetson system Python 3.6:
 
 ```bash
 cd ~/sheperd_runtime/shepherd_backend/backend
@@ -54,12 +57,14 @@ pip install -r requirements-jetson-backend.txt
 export INFERENCE_BACKEND=jetson
 export JETSON_WORKER_URL=http://127.0.0.1:8766
 python -c "import main"
-uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
+uvicorn main:app --host 0.0.0.0 --port 8001 --workers 1
 ```
 
 Keep both processes at one worker each. `GET /health` reports
 `mode: jetson-worker-bridge`; `inference.available` changes to true after the
-first packet arrives. The API uses no OpenCV, TensorRT, PyCUDA, torch, or
+first packet arrives. Check the worker with
+`curl http://127.0.0.1:8766/health` and the API with
+`curl http://127.0.0.1:8001/health`. The API uses no OpenCV, TensorRT, PyCUDA, torch, or
 Ultralytics. It calculates ROI density and the five-minute forecast from the
 worker's normalized detections. The development PC keeps
 `INFERENCE_BACKEND=ultralytics` and the same detection contract (`box`,
