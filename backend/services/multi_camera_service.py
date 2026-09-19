@@ -298,7 +298,7 @@ class MultiCameraService:
                         "analysis_processed_at": datetime.now(timezone.utc).isoformat(),
                         "analysis_completed_monotonic": completed,
                         "inference_ms": elapsed_ms,
-                        "forecast_5m": forecast,
+                        "forecast": forecast,
                         **density,
                     }
                     runtime.last_analyzed_frame_id = snapshot.frame_id

@@ -152,13 +152,13 @@ class JetsonCameraService:
                         measured_at=completed,
                     )
                     metadata.update(density)
-                    metadata["forecast_5m"] = forecast
+                    metadata["forecast"] = forecast
                     metadata["status"] = density["risk_level"]
                     runtime.latest_derived_analysis = {
                         **density,
                         "count": int(metadata.get("count", len(detections))),
                         "detections": detections,
-                        "forecast_5m": forecast,
+                        "forecast": forecast,
                         "status": density["risk_level"],
                     }
                     runtime.last_analysis_frame_id = int(analysis_frame_id)

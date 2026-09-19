@@ -19,6 +19,15 @@ const LEVEL_STATUS = {
   Danger: 'cctv-status-danger',
 };
 
+function forecastFor(metadata) {
+  return metadata?.forecast || metadata?.forecast_5m || null;
+}
+
+function forecastHorizonLabel(forecast) {
+  const seconds = Number(forecast?.horizon_seconds || 60);
+  return seconds % 60 === 0 ? `${seconds / 60}분` : `${seconds}초`;
+}
+
 function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
   const canvasRef = useRef(null);
   const [connected, setConnected] = useState(false);
@@ -179,6 +188,7 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
   }, [connected]);
 
   const level = metadata?.risk_level || 'Unavailable';
+  const forecast = forecastFor(metadata);
   const waitingMessage = workerCamera?.last_error
     || (!inferenceAvailable ? 'TensorRT Worker 패킷 대기 중...' : '영상 스트림 연결 대기 중...');
   return (
@@ -202,8 +212,8 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
         <span>브라우저 {renderFps.toFixed(1)} FPS</span>
         <span>고정 그리드 최대 {Number(metadata?.max_grid_density_people_per_m2 || 0).toFixed(2)} 명/㎡</span>
         <span>
-          5분 예측 {metadata?.forecast_5m?.predicted_roi_count ?? '-'}명
-          {metadata?.forecast_5m && ` (${metadata.forecast_5m.confidence_label})`}
+          {forecastHorizonLabel(forecast)} 예측 {forecast?.predicted_roi_count ?? '-'}명
+          {forecast && ` (${forecast.confidence_label})`}
         </span>
         <span>분석 지연 {metadata?.analysis_lag_frames ?? '-'} frames</span>
       </div>
@@ -320,7 +330,7 @@ export default function App() {
                 const metrics = cameraMetrics[camera.id] || {};
                 const level = metrics.risk_level || 'Unavailable';
                 const density = Number(metrics.applied_peak_density_people_per_m2 || 0);
-                const forecast = metrics.forecast_5m;
+                const forecast = forecastFor(metrics);
                 const dangerThreshold = Number(metrics.thresholds?.danger_min || 5);
                 return (
                   <div key={camera.id} className="camera-item">
@@ -334,7 +344,7 @@ export default function App() {
                       </div>
                     </div>
                     <div className="forecast-line">
-                      5분 뒤 ROI {forecast?.predicted_roi_count ?? '-'}명 · {' '}
+                      {forecastHorizonLabel(forecast)} 뒤 ROI {forecast?.predicted_roi_count ?? '-'}명 · {' '}
                       {forecast?.ready ? `신뢰도 ${Math.round(forecast.confidence * 100)}%` : '추세 학습 중'}
                     </div>
                     <div className="progress-bg">

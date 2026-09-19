@@ -9,13 +9,13 @@ import numpy as np
 
 
 class CrowdForecaster:
-    """Conservative online baseline for a five-minute crowd forecast."""
+    """Conservative rolling baseline for a one-minute crowd forecast."""
 
     def __init__(
         self,
-        horizon_seconds: float = 300.0,
-        history_seconds: float = 600.0,
-        min_trend_span_seconds: float = 60.0,
+        horizon_seconds: float = 60.0,
+        history_seconds: float = 120.0,
+        min_trend_span_seconds: float = 30.0,
         bucket_seconds: float = 5.0,
     ) -> None:
         self.horizon_seconds = float(horizon_seconds)
@@ -94,9 +94,9 @@ class CrowdForecaster:
             ready = len(times) >= 2 and span >= self.min_trend_span_seconds
 
             if ready:
-                # Short histories must not be extrapolated at full strength over
-                # five minutes. The trend gradually receives full weight once the
-                # observed history is at least as long as the forecast horizon.
+                # Short histories must not be extrapolated at full strength. The
+                # trend gradually receives full weight once the observed history
+                # is at least as long as the forecast horizon.
                 damping = min(1.0, span / self.horizon_seconds)
                 projected_count, count_fit = self._linear_projection(
                     times, counts, self.horizon_seconds, damping
