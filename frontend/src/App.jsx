@@ -19,11 +19,56 @@ const LEVEL_STATUS = {
   Danger: 'cctv-status-danger',
 };
 
-function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
+function CameraFeed({ camera, onMetrics, onDensityLog, workerCamera, inferenceAvailable }) {
   const canvasRef = useRef(null);
+  const previousLevelRef = useRef('Unavailable');
+  const activeLogIdRef = useRef(null);
+  const alertTimerRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [metadata, setMetadata] = useState(null);
   const [renderFps, setRenderFps] = useState(0);
+  const [showDensityAlert, setShowDensityAlert] = useState(false);
+  const [visibleAlertLevel, setVisibleAlertLevel] = useState(null);
+  const level = metadata?.risk_level || 'Unavailable';
+  const roiCount = Number(metadata?.roi_count || 0);
+  const density = Number(metadata?.applied_peak_density_people_per_m2 || 0);
+
+  useEffect(() => {
+    const previousLevel = previousLevelRef.current;
+    const isAlertLevel = level === 'Caution' || level === 'Danger';
+    const wasAlertLevel = previousLevel === 'Caution' || previousLevel === 'Danger';
+
+    if (isAlertLevel) {
+      if (level !== previousLevel) {
+        window.clearTimeout(alertTimerRef.current);
+        setShowDensityAlert(true);
+        setVisibleAlertLevel(level);
+        alertTimerRef.current = window.setTimeout(() => setShowDensityAlert(false), 5000);
+      }
+      if (!activeLogIdRef.current) {
+        const id = `${camera.id}-${Date.now()}`;
+        activeLogIdRef.current = id;
+        onDensityLog('detected', {
+          id,
+          cameraName: camera.name,
+          level,
+          density,
+          detectedAt: new Date().toLocaleTimeString('ko-KR'),
+          clearedAt: '',
+        });
+      } else if (level === 'Danger' && previousLevel !== 'Danger') {
+        onDensityLog('updated', { id: activeLogIdRef.current, level, density });
+      }
+    } else if (wasAlertLevel && activeLogIdRef.current) {
+      const id = activeLogIdRef.current;
+      activeLogIdRef.current = null;
+      onDensityLog('cleared', { id, clearedAt: new Date().toLocaleTimeString('ko-KR') });
+    }
+
+    previousLevelRef.current = level;
+  }, [camera.id, camera.name, density, level, onDensityLog]);
+
+  useEffect(() => () => window.clearTimeout(alertTimerRef.current), []);
 
   useEffect(() => {
     let socket;
@@ -178,7 +223,6 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
     context.fillText('서버 연결 대기 중...', canvas.width / 2, canvas.height / 2);
   }, [connected]);
 
-  const level = metadata?.risk_level || 'Unavailable';
   const waitingMessage = workerCamera?.last_error
     || (!inferenceAvailable ? 'TensorRT Worker 패킷 대기 중...' : '영상 스트림 연결 대기 중...');
   return (
@@ -196,6 +240,15 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
         <canvas ref={canvasRef} width={640} height={480} className="canvas-element" />
         {!connected && <div className="stream-waiting-message">{waitingMessage}</div>}
       </div>
+      {showDensityAlert && visibleAlertLevel && (
+        <div className={`density-alert ${visibleAlertLevel === 'Danger' ? 'density-alert-danger' : 'density-alert-caution'}`} role="alert" aria-live="assertive">
+          <span className="density-alert-icon" aria-hidden="true">!</span>
+          <span>
+            {visibleAlertLevel === 'Danger' ? '밀집 위험 경고' : '밀집도 주의'}
+            {' · '}{camera.name}에 {roiCount}명이 감지되었습니다. 현장을 확인해 주세요.
+          </span>
+        </div>
+      )}
       <div className="feed-metrics">
         <span>영상 {Number(metadata?.capture_fps || 0).toFixed(1)} FPS</span>
         <span>AI {Number(metadata?.analysis_fps || 0).toFixed(1)} FPS</span>
@@ -217,6 +270,7 @@ export default function App() {
   const [cameras, setCameras] = useState(DEFAULT_CAMERAS);
   const [serverHealth, setServerHealth] = useState(null);
   const [serverError, setServerError] = useState(null);
+  const [densityLogs, setDensityLogs] = useState([]);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -257,6 +311,13 @@ export default function App() {
       ...previous,
       [cameraId]: { ...previous[cameraId], ...next },
     }));
+  }, []);
+
+  const updateDensityLog = useCallback((action, entry) => {
+    setDensityLogs((previous) => {
+      if (action === 'detected') return [...previous, entry].slice(-50);
+      return previous.map((item) => item.id === entry.id ? { ...item, ...entry } : item);
+    });
   }, []);
 
   const connectedCount = cameras.filter((camera) => cameraMetrics[camera.id]?.connected).length;
@@ -306,6 +367,7 @@ export default function App() {
               key={camera.id}
               camera={camera}
               onMetrics={updateMetrics}
+              onDensityLog={updateDensityLog}
               inferenceAvailable={inferenceAvailable}
               workerCamera={serverHealth?.cameras?.find((item) => item.camera_id === camera.id)}
             />
@@ -357,6 +419,30 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      <section className="card density-log shared-density-log" aria-label="전체 카메라 밀집도 로그">
+        <h2 className="list-title">전체 밀집도 로그</h2>
+        <div className="density-log-columns" aria-hidden="true">
+          <span>카메라</span><span>단계</span><span>밀집도</span><span>감지 시간</span><span>해제 시간</span>
+        </div>
+        {densityLogs.length === 0 ? (
+          <p className="density-log-empty">밀집도 경고 기록이 없습니다.</p>
+        ) : (
+          <ul className="density-log-list" aria-live="polite">
+            {densityLogs.map((entry) => (
+              <li className="density-log-entry" key={entry.id}>
+                <span className="density-log-camera">{entry.cameraName}</span>
+                <span className={`density-log-level ${entry.level === 'Danger' ? 'log-danger' : 'log-caution'}`}>
+                  {entry.level === 'Danger' ? '위험' : '주의'}
+                </span>
+                <span className="density-log-density">{entry.density.toFixed(2)} 명/㎡</span>
+                <time>{entry.detectedAt}</time>
+                <time>{entry.clearedAt || '—'}</time>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
