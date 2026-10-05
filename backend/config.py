@@ -63,6 +63,15 @@ class Settings:
     INFLUXDB_TOKEN: str = os.getenv("INFLUXDB_TOKEN", "")
     INFLUXDB_ORG: str = os.getenv("INFLUXDB_ORG", "Lambs")
     INFLUXDB_BUCKET: str = os.getenv("INFLUXDB_BUCKET", "crowd_monitor")
+    INFLUXDB_ENABLED: bool = _env_bool(
+        "INFLUXDB_ENABLED", bool(os.getenv("INFLUXDB_TOKEN", "").strip())
+    )
+    INFLUXDB_OUTBOX_PATH: str = _env_path(
+        "INFLUXDB_OUTBOX_PATH", BACKEND_DIR / "data" / "metrics_outbox.sqlite3"
+    )
+    INFLUXDB_OUTBOX_MOUNT: str = os.getenv("INFLUXDB_OUTBOX_MOUNT", "").strip()
+    INFLUXDB_RETRY_SECONDS: float = _env_float("INFLUXDB_RETRY_SECONDS", 5.0)
+    INFLUXDB_BATCH_SIZE: int = _env_int("INFLUXDB_BATCH_SIZE", 100)
 
     YOLO_MODEL_PATH: str = _env_path("YOLO_MODEL_PATH", PROJECT_DIR / "yolov8n.pt")
     VIDEO_PATH: str = _env_video_source(

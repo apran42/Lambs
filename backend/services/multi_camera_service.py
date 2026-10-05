@@ -334,6 +334,9 @@ class MultiCameraService:
             location=runtime.definition.location,
             camera_id=camera_id,
             count=analysis["count"],
+            timestamp=(
+                analysis.get("analysis_captured_at") or analysis.get("captured_at")
+            ),
             roi_count=analysis["roi_count"],
             density=analysis["density_people_per_m2"],
             density_level=analysis["risk_level"],

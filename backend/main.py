@@ -72,7 +72,9 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return app.state.multi_camera_service.health()
+    result = app.state.multi_camera_service.health()
+    result["storage"] = db_manager.health()
+    return result
 
 
 @app.get("/api/cameras")

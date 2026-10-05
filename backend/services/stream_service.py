@@ -203,6 +203,10 @@ class StreamService:
             location=self.location,
             camera_id=self.camera_id,
             count=packet.metadata["count"],
+            timestamp=(
+                packet.metadata.get("analysis_captured_at")
+                or packet.metadata.get("captured_at")
+            ),
             roi_count=packet.metadata.get("roi_count"),
             density=packet.metadata.get("density_people_per_m2"),
             density_level=packet.metadata.get("density_level"),
