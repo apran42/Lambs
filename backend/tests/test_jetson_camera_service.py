@@ -54,6 +54,7 @@ def test_worker_packet_is_enriched_without_opencv():
                 assert packet.image_bytes == b"jpeg"
                 assert packet.metadata["roi_count"] == 1
                 assert packet.metadata["forecast"]["horizon_seconds"] == 60
+                assert packet.metadata["forecast"]["method"] == "persistence-baseline"
                 assert service.health()["inference"]["available"] is True
             finally:
                 await service.stop()

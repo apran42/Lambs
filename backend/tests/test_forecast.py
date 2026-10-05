@@ -1,10 +1,32 @@
 import json
+from datetime import datetime
 
 from ai.forecast import CrowdForecaster
 
 
+def test_default_one_minute_baseline_keeps_latest_count_without_claiming_confidence():
+    forecaster = CrowdForecaster()
+    first = forecaster.update(4, 4.0, 9.0, 2.0, 5.0, measured_at=0)
+    later = forecaster.update(7, 7.0, 9.0, 2.0, 5.0, measured_at=60)
+
+    assert first["predicted_roi_count"] == 4
+    assert later["predicted_roi_count"] == 7
+    assert later["method"] == "persistence-baseline"
+    assert later["ready"] is True
+    assert later["horizon_seconds"] == 60
+    assert later["assumption"] == "current-count-unchanged"
+    assert later["confidence"] is None
+    assert later["confidence_label"] == "unvalidated"
+    assert (
+        datetime.fromisoformat(later["forecast_for"])
+        - datetime.fromisoformat(later["generated_at"])
+    ).total_seconds() == 60
+    json.dumps(later)
+
+
 def test_forecast_warms_up_then_projects_a_rising_trend():
     forecaster = CrowdForecaster(
+        mode="trend",
         horizon_seconds=60,
         history_seconds=120,
         min_trend_span_seconds=30,
@@ -58,3 +80,11 @@ def test_forecast_keeps_only_the_rolling_history_window():
     assert result["ready"] is True
     assert result["history_span_seconds"] <= 120
     assert result["sample_count"] == 25
+
+
+def test_unknown_forecast_mode_is_rejected():
+    try:
+        CrowdForecaster(mode="unknown")
+    except ValueError:
+        return
+    raise AssertionError("Unknown forecast modes must be rejected")

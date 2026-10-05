@@ -28,6 +28,13 @@ function forecastHorizonLabel(forecast) {
   return seconds % 60 === 0 ? `${seconds / 60}분` : `${seconds}초`;
 }
 
+function forecastMethodLabel(forecast) {
+  if (!forecast) return '예측 대기 중';
+  if (forecast.method === 'persistence-baseline') return '현재 인원 유지 가정';
+  if (forecast.method === 'damped-linear-trend') return '추세식(실험)';
+  return '추세 준비 중';
+}
+
 function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
   const canvasRef = useRef(null);
   const [connected, setConnected] = useState(false);
@@ -213,7 +220,7 @@ function CameraFeed({ camera, onMetrics, workerCamera, inferenceAvailable }) {
         <span>고정 그리드 최대 {Number(metadata?.max_grid_density_people_per_m2 || 0).toFixed(2)} 명/㎡</span>
         <span>
           {forecastHorizonLabel(forecast)} 예측 {forecast?.predicted_roi_count ?? '-'}명
-          {forecast && ` (${forecast.confidence_label})`}
+          {forecast && ` · ${forecastMethodLabel(forecast)}`}
         </span>
         <span>분석 지연 {metadata?.analysis_lag_frames ?? '-'} frames</span>
       </div>
@@ -345,7 +352,7 @@ export default function App() {
                     </div>
                     <div className="forecast-line">
                       {forecastHorizonLabel(forecast)} 뒤 ROI {forecast?.predicted_roi_count ?? '-'}명 · {' '}
-                      {forecast?.ready ? `신뢰도 ${Math.round(forecast.confidence * 100)}%` : '추세 학습 중'}
+                      {forecastMethodLabel(forecast)}
                     </div>
                     <div className="progress-bg">
                       <div

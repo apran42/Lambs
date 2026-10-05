@@ -119,6 +119,7 @@ class Settings:
     LOCAL_WINDOW_HEIGHT_M: float = _env_float("LOCAL_WINDOW_HEIGHT_M", 1.0)
     LOCAL_WINDOW_STEP_M: float = _env_float("LOCAL_WINDOW_STEP_M", 0.1)
     ENABLE_LOCAL_PEAK_DENSITY: bool = _env_bool("ENABLE_LOCAL_PEAK_DENSITY", False)
+    FORECAST_MODE: str = os.getenv("FORECAST_MODE", "persistence").strip().lower()
     FORECAST_HORIZON_SECONDS: float = _env_float("FORECAST_HORIZON_SECONDS", 60.0)
     FORECAST_HISTORY_SECONDS: float = _env_float("FORECAST_HISTORY_SECONDS", 120.0)
     FORECAST_MIN_TREND_SPAN_SECONDS: float = _env_float(

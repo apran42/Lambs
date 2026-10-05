@@ -9,7 +9,7 @@ import numpy as np
 
 
 class CrowdForecaster:
-    """Conservative rolling baseline for a one-minute crowd forecast."""
+    """One-minute forecast with persistence as the safe default."""
 
     def __init__(
         self,
@@ -17,11 +17,15 @@ class CrowdForecaster:
         history_seconds: float = 120.0,
         min_trend_span_seconds: float = 30.0,
         bucket_seconds: float = 5.0,
+        mode: str = "persistence",
     ) -> None:
+        if mode not in ("persistence", "trend"):
+            raise ValueError("Forecast mode must be 'persistence' or 'trend'")
         self.horizon_seconds = float(horizon_seconds)
         self.history_seconds = float(history_seconds)
         self.min_trend_span_seconds = float(min_trend_span_seconds)
         self.bucket_seconds = float(bucket_seconds)
+        self.mode = mode
         self._samples: deque[tuple[float, int, float, float, float]] = deque()
         self._latest: dict | None = None
         self._lock = threading.RLock()
@@ -91,9 +95,17 @@ class CrowdForecaster:
 
             times, counts, peaks = self._bucketed()
             span = float(times[-1] - times[0]) if len(times) > 1 else 0.0
-            ready = len(times) >= 2 and span >= self.min_trend_span_seconds
+            trend_ready = len(times) >= 2 and span >= self.min_trend_span_seconds
+            trend_fit_score = None
 
-            if ready:
+            if self.mode == "persistence":
+                # Keep the most recently observed count. A straight-line trend
+                # performed substantially worse on the reviewed videos.
+                projected_count = float(count)
+                projected_peak = float(local_peak_density)
+                method = "persistence-baseline"
+                ready = True
+            elif trend_ready:
                 # Short histories must not be extrapolated at full strength. The
                 # trend gradually receives full weight once the observed history
                 # is at least as long as the forecast horizon.
@@ -105,22 +117,20 @@ class CrowdForecaster:
                     times, peaks, self.horizon_seconds, damping
                 )
                 method = "damped-linear-trend"
-                confidence = min(1.0, span / (2.0 * self.horizon_seconds)) * (
+                ready = True
+                trend_fit_score = min(1.0, span / (2.0 * self.horizon_seconds)) * (
                     0.5 + 0.5 * min(count_fit, peak_fit)
                 )
             else:
                 projected_count = float(np.median(counts[-3:]))
                 projected_peak = float(np.median(peaks[-3:]))
                 method = "persistence-warmup"
-                confidence = min(0.2, span / max(1.0, self.min_trend_span_seconds) * 0.2)
+                ready = False
 
             predicted_count = max(0, int(round(projected_count)))
             predicted_density = float(predicted_count / zone_area_m2)
             predicted_peak = max(predicted_density, float(max(0.0, projected_peak)))
             generated_at = datetime.now(timezone.utc)
-            confidence_label = (
-                "high" if confidence >= 0.7 else "medium" if confidence >= 0.35 else "low"
-            )
             self._latest = {
                 "horizon_seconds": int(self.horizon_seconds),
                 "generated_at": generated_at.isoformat(),
@@ -135,8 +145,10 @@ class CrowdForecaster:
                 ),
                 "method": method,
                 "ready": bool(ready),
-                "confidence": float(confidence),
-                "confidence_label": confidence_label,
+                "confidence": None,
+                "confidence_label": "unvalidated",
+                "trend_fit_score": trend_fit_score,
+                "assumption": "current-count-unchanged" if self.mode == "persistence" else None,
                 "history_span_seconds": span,
                 "sample_count": int(len(self._samples)),
             }
