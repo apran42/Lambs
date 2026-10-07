@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Lambs 인원수 · 객체 검출 통합 검수</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, Pretendard, system-ui, sans-serif; background:#0b1020; color:#e5e7eb; }
+    * { box-sizing:border-box; }
+    body { margin:0; }
+    header { height:64px; padding:0 22px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #26324b; background:#11182a; }
+    h1 { margin:0; font-size:19px; }
+    button, select, input, textarea { font:inherit; color:inherit; background:#17213a; border:1px solid #35425f; border-radius:7px; }
+    button { padding:9px 13px; cursor:pointer; }
+    button:hover { background:#22304f; }
+    button.primary { background:#2563eb; border-color:#3b82f6; }
+    button.danger { background:#7f1d1d; }
+    button.active { outline:2px solid #fbbf24; }
+    main { display:grid; grid-template-columns:minmax(620px,1fr) 330px; gap:16px; padding:16px; }
+    .card { background:#11182a; border:1px solid #26324b; border-radius:10px; padding:14px; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; }
+    .toolbar .spacer { flex:1; }
+    #canvasWrap { position:relative; width:100%; background:#030712; overflow:hidden; border-radius:8px; }
+    canvas { width:100%; height:auto; display:block; cursor:crosshair; }
+    .legend { display:flex; gap:14px; font-size:12px; color:#aab4c8; margin-top:10px; }
+    .dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:4px; }
+    .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:12px; }
+    .metric { padding:10px; background:#0b1020; border-radius:7px; text-align:center; }
+    .metric strong { display:block; font-size:21px; }
+    label { display:block; font-size:12px; color:#aab4c8; margin:12px 0 5px; }
+    select, input, textarea { width:100%; padding:8px; }
+    textarea { min-height:64px; resize:vertical; }
+    #boxList { max-height:290px; overflow:auto; margin-top:10px; border:1px solid #26324b; border-radius:7px; }
+    .box-row { display:grid; grid-template-columns:28px 1fr 72px; gap:6px; padding:7px; border-bottom:1px solid #26324b; cursor:pointer; font-size:12px; }
+    .box-row.selected { background:#243453; }
+    .box-row:last-child { border-bottom:0; }
+    .editor { margin-top:12px; padding-top:10px; border-top:1px solid #26324b; }
+    .editor-actions { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+    .checks { display:flex; gap:16px; margin-top:9px; }
+    .checks label { margin:0; color:#e5e7eb; }
+    .checks input { width:auto; }
+    .save-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px; }
+    #message { min-height:20px; margin-top:8px; font-size:12px; color:#86efac; }
+    .help { margin-top:12px; font-size:12px; line-height:1.6; color:#94a3b8; }
+    nav { display:flex; gap:8px; padding:12px 16px 0; background:#0b1020; }
+    nav button.active { background:#2563eb; outline:none; }
+    .page { display:none; }
+    .page.active { display:grid; }
+    #calibrationPage, #exportPage { grid-template-columns:minmax(620px,1fr) 360px; gap:16px; padding:16px; }
+    #calCanvas { width:100%; height:auto; display:block; cursor:crosshair; background:#030712; }
+    .status-list { line-height:1.9; color:#cbd5e1; }
+    .wide-action { width:100%; margin-top:12px; padding:13px; }
+    code { color:#93c5fd; overflow-wrap:anywhere; }
+    @media(max-width:1000px){ main{grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+<header>
+  <h1>인원수 · 객체 검출 통합 검수</h1>
+  <div id="progress">불러오는 중…</div>
+</header>
+<nav><button class="tab active" data-page="reviewPage">1. 인원·박스 검수</button><button class="tab" data-page="calibrationPage">2. 공간 캘리브레이션</button><button class="tab" data-page="exportPage">3. 검증·학습 데이터 생성</button></nav>
+<main id="reviewPage" class="page active">
+  <section class="card">
+    <div class="toolbar">
+      <button id="prev">← 이전</button><button id="next">다음 →</button>
+      <select id="jump" style="width:250px"></select>
+      <span class="spacer"></span>
+      <button id="keepAll">미검수 모두 유지</button>
+      <button id="addBox">누락 박스 추가 (N)</button>
+    </div>
+    <div id="canvasWrap"><canvas id="canvas"></canvas></div>
+    <div class="legend">
+      <span><i class="dot" style="background:#f59e0b"></i>미검수</span>
+      <span><i class="dot" style="background:#22c55e"></i>유지</span>
+      <span><i class="dot" style="background:#ef4444"></i>삭제</span>
+      <span><i class="dot" style="background:#38bdf8"></i>수정</span>
+      <span><i class="dot" style="background:#e879f9"></i>누락 추가</span>
+    </div>
+  </section>
+  <aside class="card">
+    <div class="metrics">
+      <div class="metric"><strong id="autoCount">0</strong>자동</div>
+      <div class="metric"><strong id="activeCount">0</strong>활성 박스</div>
+      <div class="metric"><strong id="timeValue">0</strong>초</div>
+    </div>
+    <label>실제 인원수 (정답)</label>
+    <input id="groundTruthCount" type="number" min="0" step="1">
+    <div id="countHint" class="help" style="margin-top:5px"></div>
+    <label>프레임 검수 상태</label>
+    <select id="status"><option value="">자동 판정</option><option value="approved">approved</option><option value="corrected">corrected</option><option value="rejected">rejected</option></select>
+    <label>장면 상태(선택)</label>
+    <select id="scene"><option value=""></option><option>empty</option><option>sparse</option><option>crowded</option><option>occluded</option><option>blurred</option><option value="crowded;occluded">crowded;occluded</option></select>
+    <label>프레임 메모(선택)</label><textarea id="frameNotes"></textarea>
+    <details style="margin-top:12px"><summary>예측 시계열 정보</summary>
+      <label>카메라 ID</label><input id="cameraId">
+      <label>구역 ID</label><input id="zoneId">
+      <label>UTC 촬영 시각(알고 있을 때만)</label><input id="timestampUtc" placeholder="2026-09-09T08:00:00Z">
+      <div class="checks"><label><input id="sequenceContinuous" type="checkbox"> 이전·다음 프레임과 연속된 장면</label></div>
+      <label>이벤트/장면 전환 설명</label><input id="eventContext" placeholder="입장, 퇴장, 장면 전환 등">
+    </details>
+    <label>박스 목록 — 클릭하여 선택</label><div id="boxList"></div>
+    <div class="editor">
+      <div id="selectedLabel">선택된 박스 없음</div>
+      <div class="editor-actions" style="margin-top:8px;grid-template-columns:repeat(4,1fr)">
+        <button id="keep">유지 (K)</button><button id="remove">삭제 (X)</button><button id="redraw">다시 그리기 (R)</button><button id="setFoot">발 위치 (F)</button>
+      </div>
+      <div class="checks"><label><input id="occluded" type="checkbox"> 가려짐</label><label><input id="truncated" type="checkbox"> 잘림</label></div>
+      <label>박스 메모</label><input id="boxNotes">
+    </div>
+    <div class="save-row"><button id="save" class="primary">저장</button><button id="saveNext" class="primary">저장 후 다음</button></div>
+    <div id="message"></div>
+    <div class="help">실제 인원수와 활성 박스 수가 같아야 통합 저장됩니다. K=유지, X=삭제, R=박스 다시 그리기, F=발 위치 지정. 누락된 사람은 N을 누른 뒤 드래그합니다. 판정하지 않은 박스는 저장할 때 자동으로 유지됩니다. Ctrl+Enter는 저장 후 다음입니다.</div>
+  </aside>
+</main>
+<section id="calibrationPage" class="page">
+  <div class="card">
+    <div class="toolbar"><button id="clearCalibration">기준점 다시 찍기</button><span>좌상단 → 우상단 → 우하단 → 좌하단 순서로 4점을 클릭하세요.</span></div>
+    <canvas id="calCanvas"></canvas>
+  </div>
+  <aside class="card">
+    <h2 style="margin-top:0">실제 바닥 크기</h2>
+    <label>가로 길이 (m)</label><input id="calWidth" type="number" min="0.01" step="0.01">
+    <label>세로 길이 (m)</label><input id="calHeight" type="number" min="0.01" step="0.01">
+    <label>캘리브레이션 버전</label><input id="calVersion" placeholder="비워두면 자동 생성">
+    <div id="calPoints" class="help"></div>
+    <button id="saveCalibration" class="primary wide-action">캘리브레이션 저장</button>
+    <div id="calMessage" class="help"></div>
+    <div class="help">선택한 사각형 내부를 실제 가로×세로 크기의 Bird-eye view로 변환합니다. 밀도 계산에는 사람 박스의 발 위치와 고정 1m×1m 그리드만 사용됩니다.</div>
+  </aside>
+</section>
+<section id="exportPage" class="page">
+  <div class="card">
+    <h2 style="margin-top:0">학습 데이터 준비 상태</h2>
+    <div id="pipelineStatus" class="status-list">불러오는 중…</div>
+    <button id="refreshStatus" class="wide-action">상태 새로고침</button>
+  </div>
+  <aside class="card">
+    <h2 style="margin-top:0">통합 내보내기</h2>
+    <p class="help">검수 완료 프레임을 시간순으로 train/val/test에 분리하고 YOLO 라벨, 미터 좌표, 고정 1㎡ 밀도, 검수 시계열, 5분 예측 정답 쌍 및 품질 보고서를 생성합니다.</p>
+    <div class="checks"><label><input id="includeMetricDensity" type="checkbox"> 실측 캘리브레이션을 적용해 미터 좌표·1㎡ 밀도 포함</label></div>
+    <p class="help">실제 크기를 측정한 경우에만 선택하세요. 선택하지 않아도 객체 탐지·인원수·시계열 학습 데이터는 생성되며, 미터 좌표와 밀도 파일은 빈 값으로 안전하게 구분됩니다.</p>
+    <button id="runExport" class="primary wide-action">학습 데이터 생성</button>
+    <div id="exportMessage" class="help"></div>
+  </aside>
+</section>
+<script>
+const canvas=document.querySelector('#canvas'), ctx=canvas.getContext('2d');
+const calCanvas=document.querySelector('#calCanvas'), calCtx=calCanvas.getContext('2d');
+const image=new Image(); let frames=[], index=0, current=null, boxes=[], selected=-1, mode='', dragStart=null, draft=null;
+let calibrationPoints=[], savedCalibration=null;
+const $=s=>document.querySelector(s);
+async function json(url,options){const r=await fetch(url,options);if(!r.ok)throw new Error((await r.json()).detail||r.statusText);return r.json()}
+function countComplete(f){return f.manual_ground_truth_count!==''||f.manual_review_status==='rejected'}
+function progressText(){const countDone=frames.filter(countComplete).length;const boxDone=frames.filter(f=>f.manual_box_review_status==='completed').length;const integrated=frames.filter(f=>countComplete(f)&&f.manual_box_review_status==='completed').length;return `통합 검수 ${integrated} / ${frames.length} · 인원수 ${countDone} · 박스 ${boxDone}`}
+async function loadFrames(){const data=await json('/api/frames');frames=data.frames;$('#progress').textContent=progressText();$('#jump').innerHTML=frames.map((f,i)=>`<option value="${i}">${i+1}. ${f.sample_id} ${countComplete(f)&&f.manual_box_review_status==='completed'?'✓':'미완료'}</option>`).join('');await load(0)}
+async function load(i){index=Math.max(0,Math.min(frames.length-1,i));current=await json(`/api/frames/${frames[index].sample_id}`);boxes=current.boxes;selected=-1;mode='';draft=null;$('#message').textContent='';$('#jump').value=index;$('#status').value=current.frame.manual_review_status||'';$('#scene').value=current.frame.manual_scene_condition||'';$('#frameNotes').value=current.frame.manual_notes||'';$('#cameraId').value=current.timeseries.camera_id||'';$('#zoneId').value=current.timeseries.zone_id||'';$('#timestampUtc').value=current.timeseries.timestamp_utc_if_known||'';$('#sequenceContinuous').checked=current.timeseries.manual_sequence_is_continuous_0_or_1==='1';$('#eventContext').value=current.timeseries.manual_event_or_scene_context||'';$('#groundTruthCount').value=current.frame.manual_review_status==='rejected'?'':(current.frame.manual_ground_truth_count!==''?current.frame.manual_ground_truth_count:boxes.filter(b=>b.action!=='delete').length);$('#timeValue').textContent=Number(current.frame.video_time_seconds).toFixed(0);$('#autoCount').textContent=current.frame.auto_detected_count;image.onload=()=>{canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;draw()};image.src=current.image_url;render()}
+function colour(box){if(box.source==='manual')return '#e879f9';if(box.action==='delete')return '#ef4444';if(box.action==='edit')return '#38bdf8';if(box.action==='keep')return '#22c55e';return '#f59e0b'}
+function draw(){ctx.drawImage(image,0,0,canvas.width,canvas.height);boxes.forEach((b,i)=>{ctx.save();ctx.strokeStyle=colour(b);ctx.lineWidth=i===selected?7:4;if(b.action==='delete')ctx.setLineDash([16,10]);ctx.strokeRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1);ctx.fillStyle=colour(b);ctx.font='bold 28px sans-serif';ctx.fillText(`${i+1}`,b.x1+5,Math.max(30,b.y1-7));if(b.action!=='delete'){ctx.beginPath();ctx.arc(b.foot_x??(b.x1+b.x2)/2,b.foot_y??b.y2,9,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=3;ctx.stroke()}ctx.restore()});if(draft){ctx.strokeStyle='#fff';ctx.lineWidth=5;ctx.setLineDash([12,8]);ctx.strokeRect(draft.x1,draft.y1,draft.x2-draft.x1,draft.y2-draft.y1);ctx.setLineDash([])}}
+function render(){const active=boxes.filter(b=>b.action!=='delete').length;$('#activeCount').textContent=active;const rejected=$('#status').value==='rejected';const truth=Number($('#groundTruthCount').value);const valid=Number.isInteger(truth)&&truth>=0;$('#groundTruthCount').disabled=rejected;$('#countHint').textContent=rejected?'rejected 프레임은 정답 인원수에서 제외됩니다.':!valid?'0 이상의 정수를 입력하세요.':truth===active?'✓ 실제 인원수와 활성 박스 수가 일치합니다.':`불일치: 실제 ${truth}명 · 활성 박스 ${active}개`;$('#countHint').style.color=rejected||valid&&truth===active?'#86efac':'#fbbf24';$('#boxList').innerHTML=boxes.map((b,i)=>`<div class="box-row ${i===selected?'selected':''}" data-i="${i}"><b>${i+1}</b><span>${b.source==='manual'?'누락 추가':`자동 ${(b.confidence*100).toFixed(0)}%`}</span><span style="color:${colour(b)}">${b.action||'미검수'}</span></div>`).join('');document.querySelectorAll('.box-row').forEach(el=>el.onclick=()=>select(+el.dataset.i));const b=boxes[selected];$('#selectedLabel').textContent=b?`박스 ${selected+1} · ${b.source==='manual'?'수동 추가':'자동 검출'}`:'선택된 박스 없음';$('#occluded').checked=!!b?.occluded;$('#truncated').checked=!!b?.truncated;$('#boxNotes').value=b?.notes||'';draw()}
+function select(i){selected=i;mode='';render()}
+function point(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*canvas.width/r.width,y:(e.clientY-r.top)*canvas.height/r.height}}
+canvas.onmousedown=e=>{const p=point(e);if(mode==='foot'&&selected>=0){boxes[selected].foot_x=p.x;boxes[selected].foot_y=p.y;mode='';render();return}if(mode==='add'||mode==='redraw'){dragStart=p;draft={x1:p.x,y1:p.y,x2:p.x,y2:p.y};draw();return}const hits=boxes.map((b,i)=>({b,i,area:(b.x2-b.x1)*(b.y2-b.y1)})).filter(o=>p.x>=o.b.x1&&p.x<=o.b.x2&&p.y>=o.b.y1&&p.y<=o.b.y2).sort((a,b)=>a.area-b.area);if(hits.length)select(hits[0].i)};
+canvas.onmousemove=e=>{if(!dragStart)return;const p=point(e);draft={x1:Math.min(dragStart.x,p.x),y1:Math.min(dragStart.y,p.y),x2:Math.max(dragStart.x,p.x),y2:Math.max(dragStart.y,p.y)};draw()};
+canvas.onmouseup=()=>{if(!draft||draft.x2-draft.x1<10||draft.y2-draft.y1<10){dragStart=null;draft=null;draw();return}if(mode==='add'){boxes.push({source:'manual',detection_index:null,confidence:null,action:'keep',...draft,foot_x:(draft.x1+draft.x2)/2,foot_y:draft.y2,occluded:false,truncated:false,notes:''});selected=boxes.length-1}else if(mode==='redraw'&&selected>=0){Object.assign(boxes[selected],draft,{action:'edit',foot_x:(draft.x1+draft.x2)/2,foot_y:draft.y2})}dragStart=null;draft=null;mode='';render()};
+$('#boxList').onclick=e=>{const row=e.target.closest('.box-row');if(row)select(+row.dataset.i)};
+function act(action){if(selected<0)return;boxes[selected].action=action;render()}
+$('#keep').onclick=()=>act('keep');$('#remove').onclick=()=>act('delete');$('#redraw').onclick=()=>{if(selected>=0){mode='redraw';$('#message').textContent='영상에서 수정 박스를 새로 드래그하세요.'}};
+$('#setFoot').onclick=()=>{if(selected>=0){mode='foot';$('#message').textContent='영상에서 사람의 실제 바닥 접점(발 위치)을 클릭하세요.'}};
+$('#addBox').onclick=()=>{mode='add';selected=-1;$('#message').textContent='누락된 사람을 둘러싸도록 드래그하세요.';render()};
+$('#keepAll').onclick=()=>{boxes.forEach(b=>{if(!b.action)b.action='keep'});render()};
+$('#occluded').onchange=e=>{if(selected>=0)boxes[selected].occluded=e.target.checked};$('#truncated').onchange=e=>{if(selected>=0)boxes[selected].truncated=e.target.checked};$('#boxNotes').oninput=e=>{if(selected>=0)boxes[selected].notes=e.target.value};
+function derivedStatus(){if($('#status').value==='rejected')return 'rejected';const changed=boxes.some(b=>b.source==='manual'||b.action==='delete'||b.action==='edit');const truth=Number($('#groundTruthCount').value);if(changed||truth!==Number(current.frame.auto_detected_count))return 'corrected';return $('#status').value||'approved'}
+async function save(next=false){
+  $('#message').style.color='#86efac';
+  try{
+    boxes.forEach(b=>{if(!b.action)b.action='keep'});
+    render();
+    const status=derivedStatus();
+    const truth=Number($('#groundTruthCount').value);
+    const active=boxes.filter(b=>b.action!=='delete').length;
+    if(status!=='rejected'&&(!Number.isInteger(truth)||truth<0))throw new Error('실제 인원수에 0 이상의 정수를 입력하세요.');
+    if(status!=='rejected'&&truth!==active)throw new Error(`실제 인원수는 ${truth}명이지만 활성 박스는 ${active}개입니다. 누락 박스를 추가하거나 잘못된 박스를 삭제해 수를 맞춰주세요.`);
+    const result=await json(`/api/frames/${current.frame.sample_id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes,manual_ground_truth_count:truth,manual_review_status:status,manual_scene_condition:$('#scene').value,manual_notes:$('#frameNotes').value,camera_id:$('#cameraId').value,zone_id:$('#zoneId').value,timestamp_utc_if_known:$('#timestampUtc').value,sequence_is_continuous:$('#sequenceContinuous').checked,event_or_scene_context:$('#eventContext').value})});
+    $('#message').textContent=`저장 완료 · 실제 ${result.ground_truth_count}명 · 박스 ${result.ground_truth_count}개`;
+    frames[index].manual_review_status=status;frames[index].manual_ground_truth_count=status==='rejected'?'':String(result.ground_truth_count);frames[index].manual_box_review_status='completed';$('#jump').options[index].textContent=`${index+1}. ${frames[index].sample_id} ✓`;$('#progress').textContent=progressText();
+    if(next&&index<frames.length-1)await load(index+1);
+  }catch(error){$('#message').style.color='#fca5a5';$('#message').textContent=`저장 실패: ${error.message}`}
+}
+$('#save').onclick=()=>save(false);$('#saveNext').onclick=()=>save(true);$('#prev').onclick=()=>load(index-1);$('#next').onclick=()=>load(index+1);$('#jump').onchange=e=>load(+e.target.value);
+$('#groundTruthCount').oninput=render;
+$('#status').onchange=render;
+document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName))return;if(e.key.toLowerCase()==='k')act('keep');if(e.key.toLowerCase()==='x')act('delete');if(e.key.toLowerCase()==='r')$('#redraw').click();if(e.key.toLowerCase()==='f')$('#setFoot').click();if(e.key.toLowerCase()==='n')$('#addBox').click();if(e.ctrlKey&&e.key==='Enter')save(true)});
+
+function drawCalibration(){if(!image.complete||!image.naturalWidth)return;calCanvas.width=image.naturalWidth;calCanvas.height=image.naturalHeight;calCtx.drawImage(image,0,0,calCanvas.width,calCanvas.height);if(calibrationPoints.length){calCtx.strokeStyle='#38bdf8';calCtx.fillStyle='rgba(56,189,248,.18)';calCtx.lineWidth=6;calCtx.beginPath();calibrationPoints.forEach((p,i)=>i?calCtx.lineTo(p[0],p[1]):calCtx.moveTo(p[0],p[1]));if(calibrationPoints.length===4){calCtx.closePath();calCtx.fill()}calCtx.stroke();calibrationPoints.forEach((p,i)=>{calCtx.fillStyle='#fbbf24';calCtx.beginPath();calCtx.arc(p[0],p[1],13,0,Math.PI*2);calCtx.fill();calCtx.fillStyle='#fff';calCtx.font='bold 30px sans-serif';calCtx.fillText(String(i+1),p[0]+17,p[1]-12)})}$('#calPoints').textContent=`선택한 기준점: ${calibrationPoints.length} / 4`}
+calCanvas.onclick=e=>{if(calibrationPoints.length>=4)return;const r=calCanvas.getBoundingClientRect();calibrationPoints.push([(e.clientX-r.left)*calCanvas.width/r.width,(e.clientY-r.top)*calCanvas.height/r.height]);drawCalibration()};
+$('#clearCalibration').onclick=()=>{calibrationPoints=[];drawCalibration();$('#calMessage').textContent=''};
+async function loadCalibration(){const data=await json('/api/calibration');savedCalibration=data.calibration;if(savedCalibration){calibrationPoints=savedCalibration.image_points.map(p=>[p[0],p[1]]);$('#calWidth').value=savedCalibration.width_m;$('#calHeight').value=savedCalibration.height_m;$('#calVersion').value=savedCalibration.version}drawCalibration()}
+$('#saveCalibration').onclick=async()=>{try{const result=await json('/api/calibration',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_points:calibrationPoints,width_m:Number($('#calWidth').value),height_m:Number($('#calHeight').value),version:$('#calVersion').value})});savedCalibration=result.calibration;$('#calVersion').value=savedCalibration.version;$('#calMessage').style.color='#86efac';$('#calMessage').textContent='캘리브레이션을 저장했습니다.';await refreshPipeline()}catch(error){$('#calMessage').style.color='#fca5a5';$('#calMessage').textContent=`저장 실패: ${error.message}`}};
+async function refreshPipeline(){try{const s=await json('/api/status');const mismatch=s.count_annotation_mismatches.length;$('#pipelineStatus').innerHTML=`<div>전체 프레임: <b>${s.total_frames}</b></div><div>인원·박스 통합 검수: <b>${s.box_reviewed_frames}</b></div><div>학습 포함 가능: <b>${s.accepted_frames}</b></div><div>제외(rejected): <b>${s.rejected_frames}</b></div><div>인원수/박스 불일치: <b style="color:${mismatch?'#fca5a5':'#86efac'}">${mismatch}</b></div><div>실측 캘리브레이션: <b style="color:${s.calibration_ready?'#86efac':'#94a3b8'}">${s.calibration_ready?'저장됨(선택 적용)':'없음(밀도 생략 가능)'}</b></div><div>연속 검수 프레임: <b>${s.continuous_reviewed_frames}</b></div><div>5분 예측 원천 데이터: <b style="color:${s.forecast_5min_source_ready?'#86efac':'#fbbf24'}">${s.forecast_5min_source_ready?'조건 충족':'아직 부족'}</b></div><div>최근 생성본: <code>${s.recent_exports[0]||'없음'}</code></div>`;$('#runExport').disabled=!s.ready_to_export;$('#includeMetricDensity').disabled=!s.calibration_ready;if(!s.calibration_ready)$('#includeMetricDensity').checked=false;return s}catch(error){$('#pipelineStatus').textContent=`상태 확인 실패: ${error.message}`}}
+$('#refreshStatus').onclick=refreshPipeline;
+$('#runExport').onclick=async()=>{try{$('#runExport').disabled=true;$('#exportMessage').style.color='#cbd5e1';$('#exportMessage').textContent='학습 데이터를 생성하는 중입니다…';const result=await json('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({include_metric_density:$('#includeMetricDensity').checked})});$('#exportMessage').style.color='#86efac';const density=result.report.metric_density_available?`1㎡ 밀도 ${result.report.density_grid_rows}행`:'실측 밀도 생략';$('#exportMessage').innerHTML=`생성 완료<br><code>${result.export_path}</code><br>YOLO ${result.report.accepted_frames}프레임 · ${density} · 5분 예측 ${result.report.forecast_5min_pairs}쌍`;await refreshPipeline()}catch(error){$('#exportMessage').style.color='#fca5a5';$('#exportMessage').textContent=`생성 실패: ${error.message}`}finally{$('#runExport').disabled=false}};
+document.querySelectorAll('.tab').forEach(button=>button.onclick=async()=>{document.querySelectorAll('.tab').forEach(item=>item.classList.toggle('active',item===button));document.querySelectorAll('.page').forEach(page=>page.classList.toggle('active',page.id===button.dataset.page));if(button.dataset.page==='calibrationPage'){await loadCalibration();drawCalibration()}if(button.dataset.page==='exportPage')await refreshPipeline()});
+loadFrames().then(()=>loadCalibration()).catch(e=>{$('#message').textContent=e.message});
+</script>
+</body>
+</html>
