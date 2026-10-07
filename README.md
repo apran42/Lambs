@@ -10,7 +10,7 @@ CCTV 영상을 활용한 실시간 인파 밀집도 분석 및 시계열 예측 
 - **인공지능**: YOLOv8
 - **백엔드**: FastAPI, InfluxDB
 - **프론트엔드**: React, Konva.js
-- **하드웨어**: Jetson Nano(배포 대상)
+- **하드웨어**: Jetson Nano 4GB(시연용 TensorRT 워커·FastAPI 배포)
 
 ## 👥 팀원 역할
 - **프론트엔드**: 실시간 대시보드 및 Konva 가시화
@@ -72,7 +72,11 @@ cd frontend
 npm run dev
 ```
 
-현재 통합본은 640x480/30 FPS 단일 카메라 로컬 영상 파이프라인을 기본으로
-하며, 카메라별 `StreamService`를 추가할 수 있도록 식별자와 영상 처리를
-분리했습니다. 상세한 확장 및 밀도/예측 계획은
-[`docs/implementation-roadmap.md`](docs/implementation-roadmap.md)를 참고하세요.
+현재 젯슨 시연은 영상 파일 1개를 TensorRT 워커(Python 3.6)에서 분석하고,
+FastAPI(Python 3.8)가 WebSocket으로 React 관제 화면에 전달합니다. InfluxDB는
+외부 장치에서 실행할 수 있으며 젯슨은 적재 실패에 대비한 로컬 Outbox를 사용합니다.
+카메라 확장 구조는 있지만 2대 동시 20 FPS와 실제 면적 기준 밀도는 아직 검증되지
+않았습니다. 1분 뒤 인원 예측은 현재값 유지 기준선이 기본이고 GRU는 선택적 실험
+모드입니다. 실행·설정은 [`backend/README.md`](backend/README.md), 데이터 검수는
+[`docs/training-data-review-guide.md`](docs/training-data-review-guide.md)를 참고하세요.
+이전 개발 계획은 [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md)에 있습니다.

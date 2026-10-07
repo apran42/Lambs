@@ -1,5 +1,10 @@
 # Jetson Nano InfluxDB 마이그레이션 안내
 
+> **이전 설계 기록:** 아래의 Jetson 내부 InfluxDB 설치안은 현재 시연 구성에
+> 적용하지 않습니다. 현행 구성은 스마트폰의 InfluxDB에 Jetson FastAPI가 원격
+> 접속하며, Jetson에는 SQLite Outbox만 둡니다. 설정은 `backend/README.md`와
+> `backend/.env.jetson-backend.example`을 확인하세요.
+
 이 문서는 개발 PC의 InfluxDB 적재를 Jetson Nano로 이전하고, 네트워크나 DB가
 일시적으로 중단되어도 측정값을 잃지 않도록 구성하는 절차를 설명합니다.
 

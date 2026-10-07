@@ -29,9 +29,10 @@ Jetson에서는 Python 3.8 FastAPI와 Python 3.6 TensorRT Worker를 분리합니
 Ultralytics, TensorRT, CUDA, OpenCV가 포함되지 않습니다. 시스템 Python이나
 기존 `~/backend_venv`에는 설치하지 마세요.
 
-Jetson 로컬 InfluxDB와 장애 복구용 Outbox 구성은
-[`docs/jetson-influxdb-migration.md`](../docs/jetson-influxdb-migration.md)를
-참고하세요.
+현재 시연의 InfluxDB는 별도 스마트폰에서 실행합니다. Jetson FastAPI는
+`INFLUXDB_URL`로 원격 연결하고, 전송 실패 시 로컬 SQLite Outbox에 보관합니다.
+[`docs/jetson-influxdb-migration.md`](../docs/jetson-influxdb-migration.md)는
+Jetson 내부 설치를 검토했던 이전 계획이므로 현행 설치 절차로 사용하지 마세요.
 
 TensorRT Worker가 영상 캡처, JPEG 인코딩과 추론을 담당합니다.
 `jetson_worker/cameras.example.json`을 로컬 설정 파일로 복사하고 외장 드라이브의
