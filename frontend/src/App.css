@@ -225,6 +225,97 @@ body {
   min-width: 0;
 }
 
+.density-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 11px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+  animation: alert-appear 180ms ease-out;
+}
+
+.density-alert-caution {
+  color: #fef08a;
+  border: 1px solid rgba(250, 204, 21, 0.65);
+  background: rgba(202, 138, 4, 0.2);
+}
+
+.density-alert-danger {
+  color: #fee2e2;
+  border: 1px solid rgba(248, 113, 113, 0.8);
+  background: rgba(185, 28, 28, 0.3);
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.16);
+}
+
+.density-alert-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.density-log {
+  margin-top: 20px;
+  padding: 18px;
+}
+
+.density-log-columns,
+.density-log-entry {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) 52px 100px minmax(125px, 1fr) minmax(125px, 1fr);
+  min-width: 620px;
+  align-items: center;
+  gap: 10px;
+}
+
+.density-log-columns {
+  padding: 8px 10px;
+  border-bottom: 1px solid #293548;
+  color: #8793a6;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.density-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.density-log-entry {
+  padding: 9px 10px;
+  border-bottom: 1px solid rgba(41, 53, 72, 0.65);
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.density-log-entry time { color: #8793a6; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.density-log-camera { color: #e2e8f0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.density-log-level { font-weight: 700; }
+.density-log-density { color: #e2e8f0; white-space: nowrap; }
+.density-log-empty { padding: 14px 10px; color: #778399; font-size: 13px; }
+.log-danger { color: #f87171; }
+.log-caution { color: #facc15; }
+
+@keyframes alert-appear {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .feed-metrics {
   display: flex;
   justify-content: space-between;
