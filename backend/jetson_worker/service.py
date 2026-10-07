@@ -33,6 +33,8 @@ class CameraState(object):
         self.frame = None
         self.image_bytes = None
         self.frame_id = 0
+        self.source_frame_index = None
+        self.source_fps = None
         self.captured_at = None
         self.analysis = None
         self.last_analyzed_frame_id = 0
@@ -167,6 +169,9 @@ class TensorRTWorkerService(object):
                     state.last_error = "Could not open source: {}".format(source)
                     self.stopping.wait(1.0)
                     continue
+                if is_file:
+                    fps = float(state.capture.get(cv2.CAP_PROP_FPS))
+                    state.source_fps = fps if fps > 0 else None
             started = time.monotonic()
             ok, frame = state.capture.read()
             if not ok:
@@ -178,6 +183,10 @@ class TensorRTWorkerService(object):
                 state.capture = None
                 self.stopping.wait(0.5)
                 continue
+            source_frame_index = (
+                max(0, int(state.capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1)
+                if is_file else None
+            )
             if frame.shape[1] != state.width or frame.shape[0] != state.height:
                 frame = cv2.resize(frame, (state.width, state.height))
             ok, encoded = cv2.imencode(
@@ -188,6 +197,7 @@ class TensorRTWorkerService(object):
                 continue
             with state.condition:
                 state.frame = frame
+                state.source_frame_index = source_frame_index
                 state.image_bytes = encoded.tobytes()
                 state.frame_id += 1
                 state.captured_at = _utc_now()
@@ -214,6 +224,8 @@ class TensorRTWorkerService(object):
                         continue
                     frame = state.frame.copy()
                     frame_id = state.frame_id
+                    source_frame_index = state.source_frame_index
+                    source_fps = state.source_fps
                     captured_at = state.captured_at
                 found = True
                 cursor = (index + 1) % len(camera_ids)
@@ -229,6 +241,8 @@ class TensorRTWorkerService(object):
                             "count": int(len(detections)),
                             "detections": detections,
                             "analysis_frame_id": int(frame_id),
+                            "analysis_source_frame_index": source_frame_index,
+                            "analysis_source_fps": source_fps,
                             "analysis_captured_at": captured_at,
                             "analysis_processed_at": _utc_now(),
                             "analysis_completed_monotonic": completed,

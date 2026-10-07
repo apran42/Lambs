@@ -2,6 +2,7 @@
 __pycache__/
 .venv/
 .venv_export/
+.venv-training/
 .env
 backend/roi_config.json
 backend/camera_configs/*-roi.json

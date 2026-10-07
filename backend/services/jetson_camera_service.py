@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 from ai.density import DensityAnalyzer
 from ai.forecast import CrowdForecaster
+from ai.count_gru import CountGRUForecaster
 from config import settings
 from services.stream_types import StreamPacket
 
@@ -26,13 +27,19 @@ class JetsonCameraRuntime:
         self.density_analyzer = DensityAnalyzer(
             definition.roi_config_path, camera_id=definition.camera_id
         )
-        self.forecaster = CrowdForecaster(
-            mode=settings.FORECAST_MODE,
-            horizon_seconds=settings.FORECAST_HORIZON_SECONDS,
-            history_seconds=settings.FORECAST_HISTORY_SECONDS,
-            min_trend_span_seconds=settings.FORECAST_MIN_TREND_SPAN_SECONDS,
-            bucket_seconds=settings.FORECAST_BUCKET_SECONDS,
-        )
+        if settings.FORECAST_MODE == "gru":
+            self.forecaster = CountGRUForecaster(
+                settings.GRU_MODEL_DIR,
+                target_wall_seconds=settings.FORECAST_HORIZON_SECONDS,
+            )
+        else:
+            self.forecaster = CrowdForecaster(
+                horizon_seconds=settings.FORECAST_HORIZON_SECONDS,
+                mode=settings.FORECAST_MODE,
+                history_seconds=settings.FORECAST_HISTORY_SECONDS,
+                min_trend_span_seconds=settings.FORECAST_MIN_TREND_SPAN_SECONDS,
+                bucket_seconds=settings.FORECAST_BUCKET_SECONDS,
+            )
         self.condition = asyncio.Condition()
         self.latest_packet = None
         self.last_analysis_frame_id = 0
@@ -142,6 +149,19 @@ class JetsonCameraService:
                         frame_height=int(metadata["height"]),
                     )
                     completed = time.monotonic()
+                    forecast_kwargs = {}
+                    if isinstance(runtime.forecaster, CountGRUForecaster):
+                        source_index = metadata.get("analysis_source_frame_index")
+                        source_fps = metadata.get("analysis_source_fps")
+                        forecast_kwargs["video_source"] = source_index is not None
+                        if source_index is not None and source_fps and source_fps > 0:
+                            forecast_kwargs["source_seconds"] = (
+                                float(source_index) / float(source_fps)
+                            )
+                            forecast_kwargs["source_fps"] = float(source_fps)
+                            forecast_kwargs["capture_fps"] = float(
+                                metadata.get("capture_fps") or 0.0
+                            )
                     forecast = runtime.forecaster.update(
                         count=density["roi_count"],
                         local_peak_density=density[
@@ -151,6 +171,7 @@ class JetsonCameraService:
                         relaxed_max=density["thresholds"]["relaxed_max"],
                         danger_min=density["thresholds"]["danger_min"],
                         measured_at=completed,
+                        **forecast_kwargs,
                     )
                     metadata.update(density)
                     metadata["forecast"] = forecast
@@ -176,6 +197,16 @@ class JetsonCameraService:
                 raise
             except (OSError, URLError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
                 runtime.last_error = str(exc)
+                if isinstance(exc, (OSError, URLError)):
+                    # A restarted worker starts frame IDs at one again.
+                    last_frame_id = 0
+                    runtime.last_analysis_frame_id = 0
+                    runtime.latest_derived_analysis = None
+                    if isinstance(runtime.forecaster, CountGRUForecaster):
+                        runtime.forecaster.reset()
+                async with runtime.condition:
+                    runtime.latest_packet = None
+                    runtime.condition.notify_all()
                 await asyncio.sleep(0.5)
 
     def _write_metric_if_due(self, runtime, metadata):
@@ -231,7 +262,19 @@ class JetsonCameraService:
         runtime = self.runtimes.get(camera_id)
         if runtime is None:
             raise KeyError(camera_id)
-        return runtime.forecaster.latest()
+        forecast = runtime.forecaster.latest()
+        if forecast is None:
+            return None
+        stale = (
+            runtime.last_error is not None
+            or runtime.last_received_at is None
+            or time.monotonic() - runtime.last_received_at >= 5.0
+        )
+        forecast["stale"] = bool(stale)
+        if stale:
+            forecast["ready"] = False
+            forecast["method"] = "unavailable-stale"
+        return forecast
 
     def health(self):
         now = time.monotonic()
@@ -255,7 +298,13 @@ class JetsonCameraService:
                     "last_error": runtime.last_error,
                 }
             )
-        available = any(runtime.latest_packet is not None for runtime in self.runtimes.values())
+        available = any(
+            runtime.latest_packet is not None
+            and runtime.last_error is None
+            and runtime.last_received_at is not None
+            and time.monotonic() - runtime.last_received_at < 5.0
+            for runtime in self.runtimes.values()
+        )
         return {
             "running": bool(self._tasks) and not self._stopping,
             "mode": "jetson-worker-bridge",

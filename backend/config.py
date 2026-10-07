@@ -126,6 +126,7 @@ class Settings:
         "FORECAST_MIN_TREND_SPAN_SECONDS", 30.0
     )
     FORECAST_BUCKET_SECONDS: float = _env_float("FORECAST_BUCKET_SECONDS", 5.0)
+    GRU_MODEL_DIR: str = os.getenv("GRU_MODEL_DIR", "").strip()
 
     CAMERA_ID: str = os.getenv("CAMERA_ID", "cam-01")
     FACILITY_NAME: str = os.getenv("FACILITY_NAME", "model-zone")
