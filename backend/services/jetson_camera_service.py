@@ -27,6 +27,7 @@ class JetsonCameraRuntime:
             definition.roi_config_path, camera_id=definition.camera_id
         )
         self.forecaster = CrowdForecaster(
+            mode=settings.FORECAST_MODE,
             horizon_seconds=settings.FORECAST_HORIZON_SECONDS,
             history_seconds=settings.FORECAST_HISTORY_SECONDS,
             min_trend_span_seconds=settings.FORECAST_MIN_TREND_SPAN_SECONDS,
@@ -152,13 +153,13 @@ class JetsonCameraService:
                         measured_at=completed,
                     )
                     metadata.update(density)
-                    metadata["forecast_5m"] = forecast
+                    metadata["forecast"] = forecast
                     metadata["status"] = density["risk_level"]
                     runtime.latest_derived_analysis = {
                         **density,
                         "count": int(metadata.get("count", len(detections))),
                         "detections": detections,
-                        "forecast_5m": forecast,
+                        "forecast": forecast,
                         "status": density["risk_level"],
                     }
                     runtime.last_analysis_frame_id = int(analysis_frame_id)

@@ -33,6 +33,7 @@ class CameraRuntime:
             camera_id=definition.camera_id,
         )
         self.forecaster = CrowdForecaster(
+            mode=settings.FORECAST_MODE,
             horizon_seconds=settings.FORECAST_HORIZON_SECONDS,
             history_seconds=settings.FORECAST_HISTORY_SECONDS,
             min_trend_span_seconds=settings.FORECAST_MIN_TREND_SPAN_SECONDS,
@@ -298,7 +299,7 @@ class MultiCameraService:
                         "analysis_processed_at": datetime.now(timezone.utc).isoformat(),
                         "analysis_completed_monotonic": completed,
                         "inference_ms": elapsed_ms,
-                        "forecast_5m": forecast,
+                        "forecast": forecast,
                         **density,
                     }
                     runtime.last_analyzed_frame_id = snapshot.frame_id

@@ -78,7 +78,7 @@ curl http://127.0.0.1:8001/health
 FastAPI의 `/health`는 `mode: jetson-worker-bridge`를 반환하며 첫 패킷을 받은 뒤
 `inference.available`이 `true`로 바뀝니다. FastAPI 프로세스는 OpenCV,
 TensorRT, PyCUDA, torch, Ultralytics를 사용하지 않습니다. Worker가 전송한
-정규화 검출 결과로 ROI 밀도와 5분 예측을 계산합니다. 개발 PC는
+정규화 검출 결과로 ROI 밀도와 1분 예측을 계산합니다. 개발 PC는
 `INFERENCE_BACKEND=ultralytics`를 사용하되 동일한 검출 형식(`box`,
 `confidence`, 선택 항목 `track_id`)을 유지합니다.
 
@@ -91,10 +91,15 @@ TensorRT, PyCUDA, torch, Ultralytics를 사용하지 않습니다. Worker가 전
 기본적으로 비활성화되어 있으며(`ENABLE_LOCAL_PEAK_DENSITY=false`), 위험 단계는
 가장 밀도가 높은 고정 셀을 기준으로 합니다.
 
-5분 예측은 시작 후 첫 1분 동안 현재값 유지 기준선을 사용하고, 이후 5초 단위
-중앙값에 감쇠 선형 추세를 적용합니다. `/api/forecast/{camera_id}` 또는 WebSocket
-메타데이터의 `forecast_5m`에서 확인할 수 있습니다. 대표성 있는 시계열 정답을
-수집한 뒤 학습 모델로 교체하거나 정확도를 검증해야 합니다.
+1분 예측의 기본값(`FORECAST_MODE=persistence`)은 현재 검출 인원이 1분 뒤에도
+유지된다고 가정하는 기준선입니다. 첫 분석 결과부터 제공하며, 학습된 예측
+모델이나 정확도가 검증된 값은 아닙니다. 이전 감쇠 선형 추세식은
+`FORECAST_MODE=trend`로만 실행할 수 있는 실험용 옵션입니다. UI는 기준선
+가정을 표시하며, 검증되지 않은 신뢰도 백분율은 표시하지 않습니다.
+`/api/forecast/{camera_id}` 또는 WebSocket 메타데이터의 `forecast`에서 확인할 수
+있습니다. 이전 백엔드와 함께 배포하는 동안 프론트엔드는 `forecast_5m`도 호환
+항목으로 읽습니다. 실제 영상에서 1분 뒤 정답과 비교한 결과를 확인한 뒤
+학습 모델 도입 여부를 결정해야 합니다.
 
 ## 검증
 
