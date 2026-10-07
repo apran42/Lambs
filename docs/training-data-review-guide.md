@@ -266,17 +266,22 @@ data/training/<데이터셋>/exports/export_<생성시각>/
 
 ## 10. 여러 영상 데이터 합치기
 
-각 영상의 export 폴더가 준비되면 다음처럼 합칩니다. 출력 폴더는 새 이름을
-사용해야 합니다.
+각 영상의 export 폴더가 준비되면 **영상 단위**로 학습·검증·테스트 세트를
+나누어 합칩니다. 같은 영상의 유사 프레임이 서로 다른 세트에 들어가면 성능이
+실제보다 높게 측정될 수 있으므로, 하나의 영상은 반드시 하나의 세트에만
+배정합니다. 출력 폴더는 새 이름을 사용해야 합니다.
 
 ```bash
 python tools/build_combined_yolo_dataset.py \
-  --source video3="data/training/sample_data_3/exports/export_생성시각" \
-  --source video4="data/training/sample_data_4/exports/export_생성시각" \
-  --output "data/training/combined_v3_v4"
+  --train-source video1="data/training/sample_data_1/exports/export_생성시각" \
+  --train-source video3="data/training/sample_data_3/exports/export_생성시각" \
+  --val-source video2="data/training/sample_data_2/exports/export_생성시각" \
+  --test-source video4="data/training/sample_data_4/exports/export_생성시각" \
+  --output "data/training/combined_grouped"
 ```
 
 Windows PowerShell에서는 `\` 대신 한 줄로 실행하거나 백틱을 사용하세요.
+생성된 `manifest.json`에서 각 영상의 배정과 프레임 수를 확인할 수 있습니다.
 
 ## 11. 문제 해결
 

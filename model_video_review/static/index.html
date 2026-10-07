@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shepherd-AI 영상별 인식 확인</title>
+    <style>
+      :root { font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; color: #e8edf2; background: #0c1117; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      .app { min-height: 100vh; }
+      .eyebrow { color: #64e4bd; font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+      main { max-width: 1600px; margin: 0 auto; padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
+      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+      .title { margin: 0; font-size: 23px; letter-spacing: -.03em; }
+      .topbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      .video-select { min-width: 180px; padding: 9px 34px 9px 12px; border: 1px solid #465662; border-radius: 9px; background: #192630; color: #f3f6f8; font: inherit; font-size: 14px; cursor: pointer; }
+      .video-select:focus { outline: 2px solid #64e4bd; outline-offset: 2px; }
+      .count { color: #69efb9; font-size: 18px; font-weight: 800; white-space: nowrap; }
+      .status { border: 1px solid #344551; border-radius: 999px; padding: 7px 11px; color: #b9c8d2; font-size: 12px; white-space: nowrap; }
+      .status.live { border-color: #326b55; color: #73ecc0; }
+      .viewer { width: fit-content; max-width: 100%; margin: 0 auto; border-radius: 12px; overflow: hidden; position: relative; }
+      canvas { display: block; width: min(1280px, calc(100vw - 48px)); height: auto; }
+      .placeholder { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 100%; color: #d0d8de; font-size: 16px; line-height: 1.5; text-align: center; padding: 20px; pointer-events: none; }
+      .bottom { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; color: #9cabb7; font-size: 13px; }
+      .controls { display: flex; gap: 8px; }
+      button.control { background: #1b2a33; color: #e9f2f3; border: 1px solid #334550; border-radius: 8px; padding: 9px 13px; cursor: pointer; font: inherit; font-size: 13px; }
+      button.control:hover:not(:disabled) { border-color: #64e4bd; }
+      button.control:disabled { opacity: .45; cursor: default; }
+      @media (max-width: 780px) { main { padding: 16px; } .title { font-size: 19px; } .video-select { min-width: 150px; } canvas { width: calc(100vw - 32px); } }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <main>
+        <div class="topbar">
+          <div>
+            <div class="eyebrow">21영상 범용 모델 · 사람 검출</div>
+            <h2 id="current-title" class="title">영상을 선택하세요</h2>
+          </div>
+          <div class="topbar-right">
+            <select id="video-select" class="video-select" aria-label="영상 선택">
+              <option>영상 목록을 불러오는 중</option>
+            </select>
+            <div class="count">검출 <span id="count">-</span>명</div>
+            <div id="status" class="status">대기 중</div>
+          </div>
+        </div>
+        <div class="viewer">
+          <canvas id="screen" width="1280" height="720" aria-label="선택한 영상과 사람 검출 박스"></canvas>
+          <div id="placeholder" class="placeholder">드롭다운에서 영상을 선택하세요.</div>
+        </div>
+        <div class="bottom">
+          <span id="time">00:00 / 00:00</span>
+          <div class="controls">
+            <button id="replay" class="control" type="button" disabled>다시 보기</button>
+            <button id="next" class="control" type="button" disabled>다음 영상 →</button>
+          </div>
+        </div>
+      </main>
+    </div>
+    <script>
+      const videoSelect = document.getElementById('video-select');
+      const screen = document.getElementById('screen');
+      const context = screen.getContext('2d');
+      const status = document.getElementById('status');
+      const placeholder = document.getElementById('placeholder');
+      const title = document.getElementById('current-title');
+      const count = document.getElementById('count');
+      const timeLabel = document.getElementById('time');
+      const replay = document.getElementById('replay');
+      const next = document.getElementById('next');
+      const videos = [];
+      const completed = new Set();
+      let selectedId = null;
+      let socket = null;
+      let generation = 0;
+      let newestFrame = -1;
+
+      function formatTime(seconds) {
+        if (seconds == null || !Number.isFinite(seconds)) return '00:00';
+        const value = Math.max(0, Math.floor(seconds));
+        return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+      }
+
+      function setStatus(text, live = false) {
+        status.textContent = text;
+        status.classList.toggle('live', live);
+      }
+
+      function renderOptions() {
+        videoSelect.replaceChildren();
+        videos.forEach(video => {
+          const label = completed.has(video.id) ? `${video.name} · 완료` : video.name;
+          videoSelect.append(new Option(label, String(video.id)));
+        });
+        if (selectedId !== null) videoSelect.value = String(selectedId);
+      }
+
+      function drawBox(box, confidence, scaleX, scaleY) {
+        const [x1, y1, x2, y2] = box;
+        const x = x1 * scaleX;
+        const y = y1 * scaleY;
+        const width = (x2 - x1) * scaleX;
+        const height = (y2 - y1) * scaleY;
+        context.strokeStyle = '#39f1a5';
+        context.lineWidth = Math.max(2, screen.width / 550);
+        context.beginPath();
+        if (context.roundRect) context.roundRect(x, y, width, height, 7);
+        else context.rect(x, y, width, height);
+        context.stroke();
+        const label = `${Math.round(confidence * 100)}%`;
+        context.font = `bold ${Math.max(13, Math.round(screen.width / 90))}px sans-serif`;
+        const labelWidth = context.measureText(label).width + 12;
+        const labelY = Math.max(0, y - 23);
+        context.fillStyle = '#39f1a5';
+        context.fillRect(x, labelY, labelWidth, 21);
+        context.fillStyle = '#062016';
+        context.fillText(label, x + 6, labelY + 15);
+      }
+
+      async function drawPacket(buffer, token) {
+        const bytes = new Uint8Array(buffer);
+        if (bytes.byteLength < 4) return;
+        const size = new DataView(buffer).getUint32(0, false);
+        if (size > bytes.byteLength - 4) return;
+        const meta = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + size)));
+        const bitmap = await createImageBitmap(new Blob([bytes.subarray(4 + size)], { type: 'image/jpeg' }));
+        if (token !== generation || meta.frame_index < newestFrame) {
+          bitmap.close();
+          return;
+        }
+        newestFrame = meta.frame_index;
+        if (screen.width !== meta.display_width || screen.height !== meta.display_height) {
+          screen.width = meta.display_width;
+          screen.height = meta.display_height;
+        }
+        context.drawImage(bitmap, 0, 0, screen.width, screen.height);
+        bitmap.close();
+        const scaleX = screen.width / meta.source_width;
+        const scaleY = screen.height / meta.source_height;
+        meta.detections.forEach(item => drawBox(item.box, item.confidence, scaleX, scaleY));
+        count.textContent = String(meta.count);
+        timeLabel.textContent = `${formatTime(meta.time_seconds)} / ${formatTime(meta.duration_seconds)}`;
+        placeholder.hidden = true;
+        setStatus('분석 중', true);
+      }
+
+      function selectVideo(id) {
+        const selected = videos.find(video => video.id === id);
+        if (!selected) return;
+        generation += 1;
+        const token = generation;
+        newestFrame = -1;
+        socket?.close();
+        selectedId = id;
+        title.textContent = selected.name;
+        count.textContent = '-';
+        timeLabel.textContent = '00:00 / 00:00';
+        placeholder.textContent = '영상을 여는 중…';
+        placeholder.hidden = false;
+        context.clearRect(0, 0, screen.width, screen.height);
+        replay.disabled = false;
+        next.disabled = videos.findIndex(video => video.id === id) === videos.length - 1;
+        setStatus('연결 중');
+        renderOptions();
+        history.replaceState(null, '', `?video=${id}`);
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        socket = new WebSocket(`${protocol}//${location.host}/ws/video/${id}`);
+        socket.binaryType = 'arraybuffer';
+        socket.onmessage = event => {
+          if (token !== generation) return;
+          if (typeof event.data === 'string') {
+            const message = JSON.parse(event.data);
+            if (message.type === 'ended') {
+              completed.add(id);
+              renderOptions();
+              setStatus('재생 완료');
+              socket?.close();
+            } else if (message.type === 'error') {
+              setStatus('오류');
+              placeholder.textContent = message.message || '영상을 열 수 없습니다.';
+              placeholder.hidden = false;
+            }
+            return;
+          }
+          drawPacket(event.data, token).catch(() => setStatus('화면 표시 오류'));
+        };
+        socket.onerror = () => { if (token === generation) setStatus('연결 오류'); };
+        socket.onclose = () => { if (token === generation && !completed.has(id) && status.textContent !== '오류') setStatus('연결 종료'); };
+      }
+
+      videoSelect.addEventListener('change', () => selectVideo(Number(videoSelect.value)));
+      replay.addEventListener('click', () => selectedId != null && selectVideo(selectedId));
+      next.addEventListener('click', () => {
+        const index = videos.findIndex(video => video.id === selectedId);
+        if (index >= 0 && index + 1 < videos.length) selectVideo(videos[index + 1].id);
+      });
+
+      fetch('/api/videos')
+        .then(response => { if (!response.ok) throw new Error('영상 목록을 가져올 수 없습니다.'); return response.json(); })
+        .then(data => {
+          videos.push(...data.videos);
+          renderOptions();
+          const requested = Number(new URLSearchParams(location.search).get('video'));
+          selectVideo(videos.some(video => video.id === requested) ? requested : videos[0]?.id);
+        })
+        .catch(error => { placeholder.textContent = error.message; setStatus('연결 오류'); });
+    </script>
+  </body>
+</html>

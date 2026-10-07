@@ -13,6 +13,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data", required=True)
     parser.add_argument("--model", default="yolov8n.pt")
     parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--patience", type=int, default=5, help="Early stopping patience; use a value at least as large as epochs to run every epoch")
+    parser.add_argument("--resume", action="store_true", help="Resume from --model last.pt, including optimizer and original training schedule")
     parser.add_argument("--image-size", type=int, default=416)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--device", default="cpu")
@@ -46,6 +48,8 @@ def main() -> None:
     from ultralytics.engine.trainer import BaseTrainer
 
     BaseTrainer.read_results_csv = read_results_without_pandas
+    if args.resume and not Path(args.model).is_file():
+        raise FileNotFoundError(f"Resume checkpoint not found: {args.model}")
     model = YOLO(args.model)
     results = model.train(
         data=args.data,
@@ -54,12 +58,13 @@ def main() -> None:
         batch=args.batch_size,
         device=args.device,
         workers=0,
-        patience=5,
+        patience=args.patience,
         seed=42,
         deterministic=True,
         project=args.project,
         name=args.name,
-        exist_ok=False,
+        exist_ok=args.resume,
+        resume=args.resume,
         plots=False,
         close_mosaic=3,
     )

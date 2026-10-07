@@ -62,7 +62,15 @@ def main() -> None:
     confidence_scores: list[list[float]] = []
     for image_path, result in zip(images, results, strict=True):
         actual_counts.append(ground_truth_count(args.labels / f"{image_path.stem}.txt"))
-        confidence_scores.append([float(score) for score in result.boxes.conf.cpu().tolist()])
+        confidence_scores.append([
+            float(score)
+            for score, klass in zip(
+                result.boxes.conf.cpu().tolist(),
+                result.boxes.cls.cpu().tolist(),
+                strict=True,
+            )
+            if int(klass) == 0
+        ])
 
     def metrics_at(threshold: float) -> dict[str, float | int]:
         errors = [
