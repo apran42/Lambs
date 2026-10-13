@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './App.css';
+import { groupDensityLogsByCamera, updateZoneAlerts } from './densityLog.js';
 
 const WS_BASE = import.meta.env.VITE_WS_BASE_URL
   || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:8000/ws/stream`;
@@ -41,54 +42,44 @@ function forecastMethodLabel(forecast) {
 
 function CameraFeed({ camera, onMetrics, onDensityLog, workerCamera, inferenceAvailable }) {
   const canvasRef = useRef(null);
-  const previousLevelRef = useRef('Unavailable');
-  const activeLogIdRef = useRef(null);
+  const expandedCanvasRef = useRef(null);
+  const expandButtonRef = useRef(null);
+  const closeButtonRef = useRef(null);
+  const activeZonesRef = useRef(new Map());
+  const lastAnalysisFrameIdRef = useRef(null);
+  const nextLogIdRef = useRef(0);
   const alertTimerRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [metadata, setMetadata] = useState(null);
   const [renderFps, setRenderFps] = useState(0);
+  const [expanded, setExpanded] = useState(false);
   const [showDensityAlert, setShowDensityAlert] = useState(false);
   const [visibleAlertLevel, setVisibleAlertLevel] = useState(null);
+  const [visibleAlertZones, setVisibleAlertZones] = useState([]);
   const level = metadata?.risk_level || 'Unavailable';
-  const roiCount = Number(metadata?.roi_count || 0);
-  const density = Number(metadata?.applied_peak_density_people_per_m2 || 0);
-
-  useEffect(() => {
-    const previousLevel = previousLevelRef.current;
-    const isAlertLevel = level === 'Caution' || level === 'Danger';
-    const wasAlertLevel = previousLevel === 'Caution' || previousLevel === 'Danger';
-
-    if (isAlertLevel) {
-      if (level !== previousLevel) {
-        window.clearTimeout(alertTimerRef.current);
-        setShowDensityAlert(true);
-        setVisibleAlertLevel(level);
-        alertTimerRef.current = window.setTimeout(() => setShowDensityAlert(false), 5000);
-      }
-      if (!activeLogIdRef.current) {
-        const id = `${camera.id}-${Date.now()}`;
-        activeLogIdRef.current = id;
-        onDensityLog('detected', {
-          id,
-          cameraName: camera.name,
-          level,
-          density,
-          detectedAt: new Date().toLocaleTimeString('ko-KR'),
-          clearedAt: '',
-        });
-      } else if (level === 'Danger' && previousLevel !== 'Danger') {
-        onDensityLog('updated', { id: activeLogIdRef.current, level, density });
-      }
-    } else if (wasAlertLevel && activeLogIdRef.current) {
-      const id = activeLogIdRef.current;
-      activeLogIdRef.current = null;
-      onDensityLog('cleared', { id, clearedAt: new Date().toLocaleTimeString('ko-KR') });
-    }
-
-    previousLevelRef.current = level;
-  }, [camera.id, camera.name, density, level, onDensityLog]);
 
   useEffect(() => () => window.clearTimeout(alertTimerRef.current), []);
+
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const source = canvasRef.current;
+    const target = expandedCanvasRef.current;
+    if (source && target) target.getContext('2d').drawImage(source, 0, 0);
+    closeButtonRef.current?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setExpanded(false);
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        closeButtonRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    const expandButton = expandButtonRef.current;
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      expandButton?.focus();
+    };
+  }, [expanded]);
 
   useEffect(() => {
     let socket;
@@ -110,6 +101,32 @@ function CameraFeed({ camera, onMetrics, onDensityLog, workerCamera, inferenceAv
 
       const jsonBytes = new Uint8Array(buffer, 4, jsonLength);
       const nextMetadata = JSON.parse(new TextDecoder().decode(jsonBytes));
+      const analysisId = nextMetadata.analysis_frame_id ?? nextMetadata.frame_id;
+      if (analysisId !== lastAnalysisFrameIdRef.current && Array.isArray(nextMetadata.grid)) {
+        lastAnalysisFrameIdRef.current = analysisId;
+        const timestamp = new Date().toLocaleTimeString('ko-KR');
+        const result = updateZoneAlerts(
+          activeZonesRef.current,
+          nextMetadata.grid,
+          { id: camera.id, name: camera.name },
+          timestamp,
+          (zoneId) => {
+            nextLogIdRef.current += 1;
+            return `${camera.id}-zone-${zoneId}-${Date.now()}-${nextLogIdRef.current}`;
+          },
+        );
+        activeZonesRef.current = result.activeZones;
+        result.changes.forEach(({ action, entry }) => onDensityLog(action, entry));
+        if (result.raisedZones.length) {
+          window.clearTimeout(alertTimerRef.current);
+          setVisibleAlertLevel(
+            result.raisedZones.some((zone) => zone.level === 'Danger') ? 'Danger' : 'Caution',
+          );
+          setVisibleAlertZones(result.raisedZones.map((zone) => zone.zoneId));
+          setShowDensityAlert(true);
+          alertTimerRef.current = window.setTimeout(() => setShowDensityAlert(false), 5000);
+        }
+      }
       setMetadata(nextMetadata);
       onMetrics(camera.id, { ...nextMetadata, connected: true });
 
@@ -175,6 +192,9 @@ function CameraFeed({ camera, onMetrics, onDensityLog, workerCamera, inferenceAv
         context.fill();
       });
 
+      const expandedCanvas = expandedCanvasRef.current;
+      if (expandedCanvas) expandedCanvas.getContext('2d').drawImage(canvas, 0, 0);
+
       const renderedAt = performance.now();
       renderTimes.push(renderedAt);
       while (renderTimes.length > 1 && renderTimes[0] < renderedAt - 2000) {
@@ -228,7 +248,7 @@ function CameraFeed({ camera, onMetrics, onDensityLog, workerCamera, inferenceAv
       window.clearTimeout(reconnectTimer);
       socket?.close();
     };
-  }, [camera.id, onMetrics]);
+  }, [camera.id, camera.name, onDensityLog, onMetrics]);
 
   useEffect(() => {
     if (connected) return;
@@ -260,13 +280,38 @@ function CameraFeed({ camera, onMetrics, onDensityLog, workerCamera, inferenceAv
       <div className="canvas-wrapper">
         <canvas ref={canvasRef} width={640} height={480} className="canvas-element" />
         {!connected && <div className="stream-waiting-message">{waitingMessage}</div>}
+        <button
+          ref={expandButtonRef}
+          type="button"
+          className="camera-expand-trigger"
+          onClick={() => setExpanded(true)}
+          aria-label={`${camera.name} 영상 확대 보기`}
+        >
+          <span className="camera-expand-hint" aria-hidden="true">확대 보기</span>
+        </button>
       </div>
+      {expanded && (
+        <div
+          className="camera-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setExpanded(false);
+          }}
+        >
+          <section className="camera-modal" role="dialog" aria-modal="true" aria-label={`${camera.name} 확대 영상`}>
+            <div className="camera-modal-header">
+              <h2>{camera.name} · 확대 영상</h2>
+              <button ref={closeButtonRef} type="button" onClick={() => setExpanded(false)} aria-label="확대 영상 닫기">닫기 ×</button>
+            </div>
+            <canvas ref={expandedCanvasRef} width={640} height={480} className="camera-modal-canvas" />
+          </section>
+        </div>
+      )}
       {showDensityAlert && visibleAlertLevel && (
         <div className={`density-alert ${visibleAlertLevel === 'Danger' ? 'density-alert-danger' : 'density-alert-caution'}`} role="alert" aria-live="assertive">
           <span className="density-alert-icon" aria-hidden="true">!</span>
           <span>
             {visibleAlertLevel === 'Danger' ? '밀집 위험 경고' : '밀집도 주의'}
-            {' · '}{camera.name}에 {roiCount}명이 감지되었습니다. 현장을 확인해 주세요.
+            {' · '}{camera.name} · 구역 {visibleAlertZones.map((zoneId) => `#${zoneId}`).join(', ')}에서 감지되었습니다. 현장을 확인해 주세요.
           </span>
         </div>
       )}
@@ -336,7 +381,7 @@ export default function App() {
 
   const updateDensityLog = useCallback((action, entry) => {
     setDensityLogs((previous) => {
-      if (action === 'detected') return [...previous, entry].slice(-50);
+      if (action === 'detected') return [...previous, entry].slice(-100);
       return previous.map((item) => item.id === entry.id ? { ...item, ...entry } : item);
     });
   }, []);
@@ -344,6 +389,7 @@ export default function App() {
   const connectedCount = cameras.filter((camera) => cameraMetrics[camera.id]?.connected).length;
   const inferenceAvailable = Boolean(serverHealth?.inference?.available);
   const apiConnected = Boolean(serverHealth) && !serverError;
+  const densityLogGroups = groupDensityLogsByCamera(densityLogs);
 
   return (
     <div className="app-container">
@@ -441,27 +487,41 @@ export default function App() {
         </div>
       </div>
 
-      <section className="card density-log shared-density-log" aria-label="전체 카메라 밀집도 로그">
-        <h2 className="list-title">전체 밀집도 로그</h2>
-        <div className="density-log-columns" aria-hidden="true">
-          <span>카메라</span><span>단계</span><span>밀집도</span><span>감지 시간</span><span>해제 시간</span>
-        </div>
-        {densityLogs.length === 0 ? (
-          <p className="density-log-empty">밀집도 경고 기록이 없습니다.</p>
+      <section className="card density-log shared-density-log" aria-label="구역별 밀집도 경고 로그">
+        <h2 className="list-title">구역별 밀집도 경고 로그</h2>
+        <p className="density-log-note">카메라의 고정 그리드 구역별 기록입니다. 현재 브라우저 세션에서만 유지됩니다.</p>
+        {densityLogGroups.length === 0 ? (
+          <p className="density-log-empty">구역별 밀집도 경고 기록이 없습니다.</p>
         ) : (
-          <ul className="density-log-list" aria-live="polite">
-            {densityLogs.map((entry) => (
-              <li className="density-log-entry" key={entry.id}>
-                <span className="density-log-camera">{entry.cameraName}</span>
-                <span className={`density-log-level ${entry.level === 'Danger' ? 'log-danger' : 'log-caution'}`}>
-                  {entry.level === 'Danger' ? '위험' : '주의'}
-                </span>
-                <span className="density-log-density">{entry.density.toFixed(2)} 명/㎡</span>
-                <time>{entry.detectedAt}</time>
-                <time>{entry.clearedAt || '—'}</time>
-              </li>
+          <div className="zone-log-groups" aria-live="polite">
+            {densityLogGroups.map((group) => (
+              <section className="zone-log-group" key={group.cameraId}>
+                <h3 className="zone-log-title">{group.cameraName}</h3>
+                <div className="zone-log-table">
+                  <div className="density-log-columns" aria-hidden="true">
+                    <span>구역</span><span>최대 인원</span><span>단계</span><span>최대 밀도</span>
+                    <span>감지 시간</span><span>종료 시간</span>
+                  </div>
+                  <ul className="density-log-list">
+                    {group.entries.map((entry) => (
+                      <li className="density-log-entry" key={entry.id}>
+                        <span className="density-log-zone">#{entry.zoneId}</span>
+                        <span>{entry.maxCount}명</span>
+                        <span className={`density-log-level ${entry.level === 'Danger' ? 'log-danger' : 'log-caution'}`}>
+                          {entry.level === 'Danger' ? '위험' : '주의'}
+                        </span>
+                        <span className="density-log-density">{entry.peakDensity.toFixed(2)} 명/㎡</span>
+                        <time>{entry.detectedAt}</time>
+                        <time title={entry.closedReason || undefined}>
+                          {entry.clearedAt ? `${entry.clearedAt} · ${entry.closedReason}` : '—'}
+                        </time>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </section>
             ))}
-          </ul>
+          </div>
         )}
       </section>
     </div>
