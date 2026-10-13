@@ -34,6 +34,7 @@ function forecastMethodLabel(forecast) {
   if (forecast.method === 'persistence-baseline') return '현재 인원 유지 가정';
   if (forecast.method === 'gru-count-video') return 'GRU 인원 예측 · 영상 재생';
   if (forecast.method === 'gru-count-live') return 'GRU 인원 예측 · 실시간';
+  if (forecast.method === 'reviewed-video-demo') return '검수 정답 참조 · 동일 영상 시연용';
   if (forecast.method === 'persistence-timebase-mismatch') return '시간축 불일치 · 현재값 유지';
   if (forecast.method === 'unavailable-stale') return '연결 대기 중';
   if (forecast.method === 'damped-linear-trend') return '추세식(실험)';

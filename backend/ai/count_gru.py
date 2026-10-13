@@ -42,6 +42,30 @@ def select_video_horizon(target_wall_seconds, source_fps, capture_fps,
     return int(model_horizon), float(effective_wall_seconds)
 
 
+def bracket_video_horizon(target_wall_seconds, source_fps, capture_fps,
+                          available_horizons):
+    """Bracket the source-video horizon matching the requested wall time.
+
+    Interpolation is allowed only between trained checkpoints. This avoids
+    silently treating a 67-second checkpoint as an exact 60-second forecast
+    when file playback slows under a multi-camera load.
+    """
+    values = (target_wall_seconds, source_fps, capture_fps)
+    if any(not np.isfinite(value) or value <= 0 for value in values):
+        return None
+    horizons = sorted(set(int(value) for value in available_horizons))
+    if not horizons:
+        return None
+    target_video_seconds = float(target_wall_seconds * capture_fps / source_fps)
+    if target_video_seconds < horizons[0] or target_video_seconds > horizons[-1]:
+        return None
+    for lower, upper in zip(horizons, horizons[1:]):
+        if lower <= target_video_seconds <= upper:
+            weight = (target_video_seconds - lower) / (upper - lower)
+            return lower, upper, float(weight), target_video_seconds
+    return horizons[-1], horizons[-1], 0.0, target_video_seconds
+
+
 def build_history(samples, origin_seconds, history_seconds, stride_seconds,
                   max_sample_age_seconds=10.0):
     """Return training-compatible [count / 10, sample age / 10] entries.
@@ -175,8 +199,13 @@ class CountGRUForecaster:
             while self._samples and self._samples[0][0] < cutoff:
                 self._samples.popleft()
 
+            bracket = None
             if is_file:
-                selection = select_video_horizon(
+                bracket = bracket_video_horizon(
+                    self.target_wall_seconds, source_fps, capture_fps,
+                    self.models.keys(),
+                )
+                selection = None if bracket else select_video_horizon(
                     self.target_wall_seconds, source_fps, capture_fps,
                     self.models.keys(),
                 )
@@ -188,17 +217,35 @@ class CountGRUForecaster:
                 self._samples, source_time, self.history_seconds,
                 self.stride_seconds,
             )
-            ready = selection is not None and history is not None
+            ready = (selection is not None or bracket is not None) and history is not None
             if ready:
-                model_horizon, effective_wall_seconds = selection
-                raw_count = self.models[model_horizon].predict(history, count)
+                if bracket is not None:
+                    lower, upper, weight, target_video_seconds = bracket
+                    lower_count = self.models[lower].predict(history, count)
+                    if weight <= 0.0 or lower == upper:
+                        raw_count = lower_count
+                        model_horizons = [lower]
+                    elif weight >= 1.0:
+                        raw_count = self.models[upper].predict(history, count)
+                        model_horizons = [upper]
+                    else:
+                        upper_count = self.models[upper].predict(history, count)
+                        raw_count = (1.0 - weight) * lower_count + weight * upper_count
+                        model_horizons = [lower, upper]
+                    model_horizon = float(target_video_seconds)
+                    effective_wall_seconds = self.target_wall_seconds
+                else:
+                    model_horizon, effective_wall_seconds = selection
+                    raw_count = self.models[model_horizon].predict(history, count)
+                    model_horizons = [model_horizon]
                 predicted_count = max(0, int(round(raw_count)))
                 method = "gru-count-video" if is_file else "gru-count-live"
             else:
                 model_horizon = None
                 effective_wall_seconds = None
+                model_horizons = []
                 predicted_count = max(0, int(count))
-                method = ("persistence-timebase-mismatch" if selection is None
+                method = ("persistence-timebase-mismatch" if selection is None and bracket is None
                           else "persistence-warmup")
 
             predicted_density = float(predicted_count / zone_area_m2)
@@ -227,6 +274,8 @@ class CountGRUForecaster:
                     self._samples[-1][0] - self._samples[0][0]),
                 "sample_count": int(len(self._samples)),
                 "model_video_horizon_seconds": model_horizon,
+                "model_video_horizons": model_horizons,
+                "timebase_interpolated": len(model_horizons) == 2,
                 "effective_wall_horizon_seconds": effective_wall_seconds,
             }
             return dict(self._latest)

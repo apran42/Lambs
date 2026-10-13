@@ -36,6 +36,7 @@ class JetsonCameraRuntime:
             self.forecaster = CrowdForecaster(
                 horizon_seconds=settings.FORECAST_HORIZON_SECONDS,
                 mode=settings.FORECAST_MODE,
+                reviewed_demo_path=settings.FORECAST_REVIEWED_DEMO_PATH,
                 history_seconds=settings.FORECAST_HISTORY_SECONDS,
                 min_trend_span_seconds=settings.FORECAST_MIN_TREND_SPAN_SECONDS,
                 bucket_seconds=settings.FORECAST_BUCKET_SECONDS,
@@ -162,6 +163,21 @@ class JetsonCameraService:
                             forecast_kwargs["capture_fps"] = float(
                                 metadata.get("capture_fps") or 0.0
                             )
+                    elif runtime.forecaster.mode == "reviewed-demo":
+                        source_index = metadata.get("analysis_source_frame_index")
+                        source_fps = metadata.get("analysis_source_fps") or metadata.get("source_fps")
+                        video_time = metadata.get("analysis_video_time_seconds")
+                        if video_time is None and source_index is not None and source_fps:
+                            video_time = float(source_index) / float(source_fps)
+                        capture_fps = float(metadata.get("capture_fps") or 0.0)
+                        forecast_kwargs.update(
+                            source_video_id=metadata.get("source_video_id"),
+                            video_time_seconds=video_time,
+                            source_duration_seconds=metadata.get("source_duration_seconds"),
+                            video_seconds_per_wall_second=(
+                                capture_fps / float(source_fps) if source_fps else 0.0
+                            ),
+                        )
                     forecast = runtime.forecaster.update(
                         count=density["roi_count"],
                         local_peak_density=density[

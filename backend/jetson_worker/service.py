@@ -3,6 +3,7 @@
 import datetime
 import json
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -23,6 +24,20 @@ def _rate(samples):
     return float(len(samples) - 1) / elapsed if elapsed > 0 else 0.0
 
 
+def _reviewed_video_id(definition, source, is_file):
+    explicit_id = definition.get("reviewed_video_id")
+    if explicit_id is not None:
+        return str(explicit_id)
+    if not is_file:
+        return None
+    match = re.search(
+        r"sample_data(?:\s*\((\d+)\)|[_-](\d+))(?=\.[^.]+$)",
+        os.path.basename(source),
+        re.IGNORECASE,
+    )
+    return (match.group(1) or match.group(2)) if match else None
+
+
 class CameraState(object):
     def __init__(self, definition, width, height, jpeg_quality):
         self.definition = definition
@@ -35,6 +50,8 @@ class CameraState(object):
         self.frame_id = 0
         self.source_frame_index = None
         self.source_fps = None
+        self.source_video_id = None
+        self.source_duration_seconds = None
         self.captured_at = None
         self.analysis = None
         self.last_analyzed_frame_id = 0
@@ -67,6 +84,9 @@ class CameraState(object):
                 "camera_name": self.definition.get("name", self.definition["id"]),
                 "frame_id": int(self.frame_id),
                 "captured_at": self.captured_at,
+                "source_video_id": self.source_video_id,
+                "source_duration_seconds": self.source_duration_seconds,
+                "source_fps": self.source_fps,
                 "width": self.width,
                 "height": self.height,
                 "target_stream_fps": float(self.definition.get("target_fps", 20.0)),
@@ -161,6 +181,7 @@ class TensorRTWorkerService(object):
     def _capture_loop(self, state):
         source = self._source(state.definition["source"])
         is_file = isinstance(source, str) and os.path.isfile(source)
+        state.source_video_id = _reviewed_video_id(state.definition, source, is_file)
         interval = 1.0 / max(1.0, float(state.definition.get("target_fps", 20.0)))
         while not self.stopping.is_set():
             if state.capture is None or not state.capture.isOpened():
@@ -172,6 +193,10 @@ class TensorRTWorkerService(object):
                 if is_file:
                     fps = float(state.capture.get(cv2.CAP_PROP_FPS))
                     state.source_fps = fps if fps > 0 else None
+                    frames = float(state.capture.get(cv2.CAP_PROP_FRAME_COUNT))
+                    state.source_duration_seconds = (
+                        frames / fps if fps > 0 and frames > 0 else None
+                    )
             started = time.monotonic()
             ok, frame = state.capture.read()
             if not ok:

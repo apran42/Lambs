@@ -1,7 +1,59 @@
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from datetime import datetime
 
 from ai.forecast import CrowdForecaster
+
+
+def test_reviewed_demo_uses_matching_video_timeline_and_falls_back_safely():
+    with TemporaryDirectory() as directory:
+        reference = Path(directory) / "reference.json"
+        reference.write_text(
+            json.dumps({
+                "horizon_seconds": 60,
+                "videos": {
+                    "11": {
+                        "duration_seconds": 180,
+                        "samples": [[0, 1], [30, 3], [60, 6], [70, 7], [90, 9]],
+                    }
+                },
+            }),
+            encoding="utf-8",
+        )
+        forecaster = CrowdForecaster(mode="reviewed-demo", reviewed_demo_path=str(reference))
+        result = forecaster.update(
+            2, 0.5, 10, 2, 5, measured_at=10,
+            source_video_id="11", video_time_seconds=10,
+        )
+        assert result["predicted_roi_count"] == 7
+        assert result["method"] == "reviewed-video-demo"
+        assert result["confidence"] is None
+        assert result["reference_video_time_seconds"] == 70
+        slowed_playback = forecaster.update(
+            2, 0.5, 10, 2, 5, measured_at=15,
+            source_video_id="11", video_time_seconds=30,
+            video_seconds_per_wall_second=2 / 3,
+        )
+        assert slowed_playback["reference_video_time_seconds"] == 70
+        assert slowed_playback["predicted_roi_count"] == 7
+        wrapped = forecaster.update(
+            2, 0.5, 10, 2, 5, measured_at=20,
+            source_video_id="11", video_time_seconds=150,
+        )
+        assert wrapped["predicted_roi_count"] == 3
+        fallback = forecaster.update(
+            2, 0.5, 10, 2, 5, measured_at=30,
+            source_video_id="99", video_time_seconds=10,
+        )
+        assert fallback["predicted_roi_count"] == 2
+        assert fallback["method"] == "persistence-baseline"
+        mismatched_video = forecaster.update(
+            2, 0.5, 10, 2, 5, measured_at=40,
+            source_video_id="11", video_time_seconds=10,
+            source_duration_seconds=120,
+        )
+        assert mismatched_video["method"] == "persistence-baseline"
 
 
 def test_default_one_minute_baseline_keeps_latest_count_without_claiming_confidence():

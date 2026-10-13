@@ -5,9 +5,16 @@ import time
 import numpy as np
 
 import jetson_worker.service as worker_module
-from jetson_worker.service import TensorRTWorkerService
+from jetson_worker.service import TensorRTWorkerService, _reviewed_video_id
 from jetson_worker.server import ThreadingHTTPServer, WorkerHandler
 from services.jetson_camera_service import JetsonCameraService
+
+
+def test_reviewed_video_id_accepts_local_and_jetson_file_names():
+    assert _reviewed_video_id({}, "sample_data (11).mp4", True) == "11"
+    assert _reviewed_video_id({}, "sample_data_35.mp4", True) == "35"
+    assert _reviewed_video_id({"reviewed_video_id": 7}, "other.mp4", True) == "7"
+    assert _reviewed_video_id({}, 0, False) is None
 
 
 class FakeCapture:

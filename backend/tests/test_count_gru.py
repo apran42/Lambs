@@ -4,7 +4,8 @@ from pathlib import Path
 
 import numpy as np
 
-from ai.count_gru import (CountGRUForecaster, NumpyCountGRU, build_history,
+from ai.count_gru import (CountGRUForecaster, NumpyCountGRU,
+                          bracket_video_horizon, build_history,
                           select_video_horizon)
 
 
@@ -49,6 +50,42 @@ class CountGRUTests(unittest.TestCase):
         self.assertEqual(select_video_horizon(60, 30, 20), (40, 60.0))
         self.assertEqual(select_video_horizon(60, 30, 30), (60, 60.0))
         self.assertIsNone(select_video_horizon(60, 30, 10))
+        self.assertEqual(bracket_video_horizon(60, 30, 18, (30, 40, 60)),
+                         (30, 40, 0.6, 36.0))
+        self.assertIsNone(bracket_video_horizon(60, 30, 10, (30, 40, 60)))
+
+    def test_interpolates_loaded_models_for_slow_two_camera_playback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for horizon, correction in ((30, 0.1), (40, 0.4)):
+                model_dir = Path(directory) / ("video%d_runtime" % horizon)
+                model_dir.mkdir()
+                (model_dir / "model.json").write_text(
+                    '{"format":"lambs-count-gru-v1",'
+                    '"horizon_video_seconds":%d,"history_seconds":30,'
+                    '"stride_seconds":10}' % horizon, encoding="utf-8")
+                np.savez(model_dir / "weights.npz", **{
+                    "gru.weight_ih_l0": np.zeros((48, 2), dtype=np.float32),
+                    "gru.weight_hh_l0": np.zeros((48, 16), dtype=np.float32),
+                    "gru.bias_ih_l0": np.zeros(48, dtype=np.float32),
+                    "gru.bias_hh_l0": np.zeros(48, dtype=np.float32),
+                    "head.weight": np.zeros((1, 16), dtype=np.float32),
+                    "head.bias": np.asarray([correction], dtype=np.float32),
+                })
+            forecaster = CountGRUForecaster(directory)
+            for second in (0, 10, 20, 30):
+                result = forecaster.update(
+                    5, 1, 5, 2, 5, measured_at=second * 30 / 18,
+                    source_seconds=second, source_fps=30, capture_fps=18,
+                )
+                if second == 0:
+                    self.assertEqual(result["method"], "persistence-warmup")
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["method"], "gru-count-video")
+            self.assertEqual(result["predicted_roi_count"], 8)
+            self.assertEqual(result["model_video_horizons"], [30, 40])
+            self.assertTrue(result["timebase_interpolated"])
+            self.assertAlmostEqual(result["model_video_horizon_seconds"], 36.0)
+            self.assertAlmostEqual(result["effective_wall_horizon_seconds"], 60.0)
 
     def test_history_matches_training_sampling(self):
         samples = [(0, 2), (8, 3), (19, 4), (30, 5)]

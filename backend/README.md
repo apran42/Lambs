@@ -104,9 +104,39 @@ TensorRT, PyCUDA, torch, Ultralytics를 사용하지 않습니다. Worker가 전
 젯슨에서는 선택적으로 `FORECAST_MODE=gru`와 `GRU_MODEL_DIR`를 설정해 학습된
 인원 수 GRU를 사용할 수 있습니다. `GRU_MODEL_DIR`에는 내보낸
 `video*_runtime` 폴더들이 있어야 합니다. 영상 파일은 원본 FPS와 실제 캡처
-FPS를 비교해 1분에 가까운 체크포인트를 선택하며, 일치하는 모델이나 충분한
-이력이 없으면 현재값 유지 방식으로 돌아갑니다. 모델 예측의 신뢰구간은 아직
-검증되지 않았으므로 시연 결과를 실제 안전 판단으로 사용하지 마세요.
+FPS로 60초 뒤에 해당하는 영상 시간축을 계산합니다. 이 시점이 학습된 두
+체크포인트 사이면 두 GRU 출력값을 선형 보간하고, 정확히 일치하면 해당 모델만
+사용합니다. 학습 범위 밖이거나 이력이 부족하면 현재값 유지 방식으로
+돌아갑니다. `/api/forecast/{camera_id}`의 `timebase_interpolated`와
+`model_video_horizons`로 보간 여부를 확인할 수 있습니다. 보간은 시간축을
+맞추는 근사치이며 정확도 개선이나 90% 신뢰구간을 보장하지 않습니다.
+시연 결과를 실제 안전 판단으로 사용하지 마세요.
+
+### 검수 영상 정답 참조 모드(선택)
+
+`FORECAST_MODE=reviewed-demo`와
+`FORECAST_REVIEWED_DEMO_PATH=./reviewed_demo_forecast.json`을 설정하면,
+**검수 완료된 동일 영상에서만** 현재 재생 시각의 1분 뒤 정답 인원수를 참조할 수
+있습니다. 이 값은 미래 정답을 이미 알고 있는 시연용 기준이며 범용 AI 예측이나
+GRU 모델의 성능으로 제시해서는 안 됩니다. 화면에는
+`검수 정답 참조 · 동일 영상 시연용`이라고 표시됩니다. 기본 설정과 기존
+`FORECAST_MODE=gru` 실행에는 영향을 주지 않습니다.
+참조값은 ROI 전체 인원수만 제공하며, 미래 구역별 밀도·위험 단계의 정답은 아닙니다.
+
+Worker는 `sample_data (11).mp4`와 `sample_data_11.mp4` 형태의 파일명에서
+영상 번호를 읽습니다. 다른 파일명에는 `cameras.local.json`의 카메라 항목에
+`"reviewed_video_id": 11`처럼 지정합니다. 영상 번호·길이·재생 시각이
+맞지 않거나 측정 FPS가 없으면 현재 인원 유지 방식으로 돌아갑니다.
+참조 파일은 저장소의 `backend/reviewed_demo_forecast.json`에 11번·35번
+검수값이 포함되어 있습니다. 새 검수본으로 다시 만들려면 프로젝트 루트에서
+다음을 실행합니다.
+
+```bash
+python tools/evaluate_one_minute_forecast.py --stride-seconds 1 --demo-video-ids 11,35 --export-reviewed-demo backend/reviewed_demo_forecast.json
+```
+
+참조 모드를 Jetson에 적용할 때는 Worker(Python 3.6)와 FastAPI(Python 3.8)를
+각각 배포·재시작해야 합니다. 실제 카메라나 미검수 영상에는 사용하지 마세요.
 
 ## 검증
 
